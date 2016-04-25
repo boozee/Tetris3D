@@ -5,6 +5,7 @@
 		<style>
 			body { font-family: Monospace; background-color: #FFFFFF; margin: 0px; overflow: hidden; }
 			canvas { width: 100%; height: 100%; }
+			.function > div .property-name {width: 60%; }
 		</style>
 		<script src="lib/three.min.js"></script>
 		<script src="lib/dat.gui.min.js"></script>
@@ -17,78 +18,31 @@
 	</head>
 	<body>
 		<script>
-
-			/*The goal of this project was to recreate a simple but significative and realistic 3D representation of the famous Tetris game,
-			both in aspect (colors, textures) and gameplay (score system, rotation of pieces, conditions of gameover).
-			The only semplification that needs to be taken into account is the scrolling movement of the falling pieces, which is actually
-			continuous instead of stepped, due to the fact that complicating too much the code for something not related 3D graphics did not seem a good idea.
-
-			To make everything work the variable path on line 44 must be set to the path inside the local server in which the folder is run.
-			Nothing else should be necessary (tested on Google Chrome 49.0.2623.112m).
-
-			The scene is static and not interactive in any way but shows a pausable game-over sequence (repeated cyclically) in which we suppose a
-			player is actually controlling the game.
-
-			The player camera is fixed and simulates the perspective of the original game, in particular it's difficult to get the whole 3D scene structure
-			from this perspective; the user can switch to the free (mouse-controlled) camera through the button on the top of the page.
-
-			The models used were taken from: http://www.sharecg.com/v/77000/gallery/5/3D-Model/TETRIS and do not have any kind of use restrictions;
-			they have been actually slightly modified (basically through scaling and change of pivot) to get a nicer (kind of) puzzle picture.
-			The only texture used so far (maybe some nicer terrain/background could be included in the future) is free to use too and is accessible at:
-			http://mb.srb2.org/showpost.php?p=755167&postcount=1
-
-			There's some (intended to) optimization code around to reduce the amount of work that goes through the pipeline and obtain better performance on
-			weaker machines, especially in the event lightning effects and better materials are added.*/
-
 			if ( ! Detector.webgl ) Detector.addGetWebGLMessage();
 
-			THREE.ImageUtils.crossOrigin = '';
-			var path = "http://localhost:8080/"; //I MUST BE SET
-
-			//new gui
-			window.onload = function(){
-				var gui = new dat.GUI();
-				gui.width = 350;
-				var gcontrols = gui.addFolder("General controls");
-				gcontrols.open();
-
-				var game = new commands();
-
-				var camerabtn = gcontrols.add( game, "changeCamera" ).name( "Change to free camera" );
-				camerabtn.onChange(function(){if (camera==0) camerabtn.name("Change to player camera"); if (camera==1) camerabtn.name("Change to free camera");});
-
-				var pausebtn = gcontrols.add( game, "pauseGame" ).listen().name( "Pause" );
-				pausebtn.onChange(function(){if (pause) pausebtn.name("Pause"); else pausebtn.name("Resume");});
+			//retrive the current path, differently from local and remote modes
+			var path = "";
+			if(window.location.origin == "file://")
+			{
+				path = "http://localhost:8080/";
 			}
+			else
+				path = window.location.origin+"/";
 
-			//gui functions
-			var commands = function(){
-				this.changeCamera = function()
-				{
-					if(!camera_error)
-						camera = (camera+1)%2;
-				};
-				this.pauseGame = function()
-				{
-					if(!camera_error)
-					{
-						if(pause)
-						{
-							pause = false;
-							if(resumereset)
-							{
-								resumereset = false;
-								resetS();
-							}
-						}
-						else
-							pause = true;
-					}
-				};
-			}
+			//THREE.ImageUtils.crossOrigin = '';
 
+			//what to do after initialization
 			var manager = new THREE.LoadingManager();
 			manager.onLoad = function ( item, loaded, total ) {
+				//instantiate ambiental elements
+				instantiateWalls();
+				instantiateBackground();
+				instantiateTerrain();
+				scene.add(staticT);
+				instantiateGameover();
+				instantiateLevel();
+				instantiateScore();
+				instantiateNext();
 				//instantiate moving tetramins
 				tetris1 = new THREE.Mesh( lightblue_geom , lightblue_mat );
 				tetris2 = new THREE.Mesh( purple_geom , purple_mat );
@@ -100,35 +54,49 @@
 				render();
 			};
 
+			//global variables
+			var staticT; //aggregate object of static tetramins;
+			var tex_wall, tex_wall1, tex_wall2; //textures for the wall
+			var wallL, wallR; //wall objects
+			var back; //background object
+			var terrain; //terrain object
+			var gameover; var gameoverbox; //gameover objects
+			var level; var levelbox; //level objects
+			var scoreT; var scorebox; //score objects
+			var next; var nextbox; //next objects
 			var blue_geom, green_geom, red_geom, purple_geom, yellow_geom, orange_geom, lightblue_geom; //tetramins geometries to be loaded
 			var blue_mat, green_mat, red_mat, purple_mat, yellow_mat, orange_mat, lightblue_mat; //tetramins materials to be loaded
 			var tetris1, tetris2, tetris3, tetris4, tetris5, tetris6; //tetramins to be moved around
+			var vtime; //used to discretize the falling animation
+
+			//global parameters
 			var next_x = 13; var next_y = 6; var next_z = -1; //default position for next tetramin
 			var score_x = 10.5; var score_y = 12; var score_z = 3; //default position for score text
 			var level_x = -5; var level_y = 15; var level_z = 2; //default position for level text
 			var active = 0; //number of current tetramin active
 			var phase = 1; //phase of the animation, from 1 to 6 (game over);
 			var rot = false; //used to rotate only once
+			var transl; //used to translate the correct number of times
 			var reset; //used to reset only once
 			var score; //actual score
 			var pause = false; //pause on/off
 			var resumereset = false; //resume must reset due to pause called on gameover?
+			var speed = 1; var smult = 0.03;
 
-			//LOADING TEXTURES
-			var tex_wall = THREE.ImageUtils.loadTexture( path + "Tetris3D/media/brick128.png" );
-			var tex_wall1 = THREE.ImageUtils.loadTexture( path + "Tetris3D/media/brick128.png" );
-			var tex_wall2 = THREE.ImageUtils.loadTexture( path + "Tetris3D/media/brick128.png" );
-
-			//terrain texture (for future use)
-
-			//background texture (for future use)
-
-			//loading all necessary models and spawning static ones
-			var loader = new THREE.OBJLoader(manager);
-
+			//scene creation
 			var scene = new THREE.Scene();
 			scene.fog = new THREE.FogExp2( 0xF4FF89, 0.015 );
 			var staticT = new THREE.Object3D(); //all static tetramins can be moved together
+
+			//Loading textures
+			var tloader = new THREE.TextureLoader( manager );
+			tloader.load(
+				path + "Tetris3D/media/brick128.png",
+				function ( texture ) { tex_wall = tex_wall1 = tex_wall2 = texture; }
+			);
+
+			//loading all models and spawning static tetramins
+			var loader = new THREE.OBJLoader(manager);
 
 			//BLUE TETRIS
 			loader.load( path + "Tetris3D/media/tetris_blue.obj" ,
@@ -228,92 +196,10 @@
 				})}
 			);
 
-			scene.add(staticT);
-
-			//create terrain
-			var floor_geometry = new THREE.PlaneBufferGeometry(150, 50);
-			var floor_material = new THREE.MeshBasicMaterial( { color: 0x6C7058, side: THREE.DoubleSide } );
-			var floor = new THREE.Mesh(floor_geometry, floor_material);
-			floor.rotation.x = Math.PI / 2;
-			floor.position.set(0,-0.05,0); //for z-conflict
-			scene.add(floor);
-			floor.matrixAutoUpdate = false; floor.updateMatrix();
-
-			//create and position background
-			var back_geometry = new THREE.PlaneBufferGeometry(100, 40);
-			var back_material = new THREE.MeshBasicMaterial( { color: 0x000000, side: THREE.DoubleSide } );
-			var back = new THREE.Mesh(back_geometry, back_material);
-			back.position.set(0,20,-2.01); //for z-conflict
-			scene.add(back);
-			back.matrixAutoUpdate = false; back.updateMatrix();
-
-			//create and position walls
-			var wall_geometry = new THREE.BoxGeometry( 1 , 18 , 2 );
-
-			var wall_material = new THREE.MeshBasicMaterial();
-			tex_wall.wrapS = tex_wall.wrapT = THREE.RepeatWrapping;
-			tex_wall.repeat.set( 1, 18 );
-			wall_material.map = tex_wall;
-
-			var wall_material1 = new THREE.MeshBasicMaterial();
-			tex_wall1.wrapS = tex_wall1.wrapT = THREE.RepeatWrapping;
-			tex_wall1.repeat.set( 1, 2 );
-			wall_material1.map = tex_wall1;
-
-			var wall_material2 = new THREE.MeshBasicMaterial();
-			tex_wall2.wrapS = tex_wall2.wrapT = THREE.RepeatWrapping;
-			tex_wall2.repeat.set( 2, 18 );
-			wall_material2.map = tex_wall2;
-
-			var wallMats = [
-				wall_material2, //right
-				wall_material2, //left
-				wall_material1, //above
-				wall_material1, //under
-				wall_material, //front
-				wall_material, //back
-			];
-
-			var wallL = new THREE.Mesh( wall_geometry , new THREE.MeshFaceMaterial(wallMats));
-			var wallR = new THREE.Mesh( wall_geometry , new THREE.MeshFaceMaterial(wallMats) );
-			wallL.position.set(-0.5,9,-1);
-			wallR.position.set(10.5,9,-1);
-			scene.add(wallL);
-			scene.add(wallR);
-			wallL.matrixAutoUpdate = false; wallL.updateMatrix(); //optimization: static objects do not need update
-			wallR.matrixAutoUpdate = false; wallR.updateMatrix();
-
-			//create gameover text mesh
-			var gameover_geom = new THREE.TextGeometry("GAME OVER", {font: 'helvetiker',  size: 1, height: 0.5, curveSegments: 1});
-			var gameover = new THREE.Mesh( gameover_geom, new THREE.MeshBasicMaterial( {color: "red" } ) );
-			gameover.position.set( 1 , 10 , 4 );
-
-			//create score text mesh
-			var score_geom = new THREE.TextGeometry("SCORE : ", {font: 'helvetiker',  size: 0.5, height: 0.1, curveSegments: 1});
+			//material for the score mesh
 			var score_mat = new THREE.MeshBasicMaterial( {color: "white" } );
-			var scoreT = new THREE.Mesh( score_geom,  score_mat);
-			scoreT.position.set( score_x , score_y , score_z );
-			scene.add(scoreT);
-			scoreT.matrixAutoUpdate = false;
-			scoreT.updateMatrix();
 
-			//create next text mesh
-			var next_geom = new THREE.TextGeometry("NEXT", {font: 'helvetiker',  size: 0.7, height: 0.1, curveSegments: 1});
-			var next = new THREE.Mesh( next_geom, new THREE.MeshBasicMaterial( {color: "white" } ) );
-			next.position.set( next_x+0.5 , next_y+3 , next_z+0.5 );
-			scene.add(next);
-			next.matrixAutoUpdate = false;
-			next.updateMatrix();
-
-			//create level text mesh
-			var level_geom = new THREE.TextGeometry("LEVEL 2", {font: 'helvetiker',  size: 0.7, height: 0.1, curveSegments: 1});
-			var level = new THREE.Mesh( level_geom, new THREE.MeshBasicMaterial( {color: "white" } ) );
-			level.position.set( level_x , level_y , level_z );
-			scene.add(level);
-			level.matrixAutoUpdate = false;
-			level.updateMatrix();
-
-			//create transparent boxes
+			//material for transparent boxes
 			var transp_mat = new THREE.MeshBasicMaterial(
 			{
 				color: 0xffffff,
@@ -324,25 +210,8 @@
 				transparent: true
 			});
 
-			var nextbox = new THREE.Mesh( new THREE.BoxGeometry( 4 , 5 , 2 ) , transp_mat);
-			nextbox.position.set(next_x+1.5 , next_y+2 , next_z+0.5);
-			scene.add(nextbox);
-			nextbox.matrixAutoUpdate = false;
-			nextbox.updateMatrix();
-
-			var scorebox = new THREE.Mesh( new THREE.BoxGeometry( 4.5 , 2 , 1 ) , transp_mat);
-			scorebox.position.set( score_x + 2 , score_y , score_z );
-			scene.add(scorebox);
-			scorebox.matrixAutoUpdate = false;
-			scorebox.updateMatrix();
-
-			var levelbox = new THREE.Mesh( new THREE.BoxGeometry( 4.5 , 2 , 1 ) , transp_mat);
-			levelbox.position.set( level_x + 2 , level_y , level_z );
-			scene.add(levelbox);
-			levelbox.matrixAutoUpdate = false;
-			levelbox.updateMatrix();
-
-			var transp_mat_go = new THREE.MeshBasicMaterial( //nicer effect for gameover
+			//material for gameover box
+			var transp_mat_go = new THREE.MeshBasicMaterial(
 			{
 				color: 0x000000,
 				opacity: 0.5,
@@ -352,42 +221,56 @@
 				transparent: true
 			});
 
-			var gameoverbox = new THREE.Mesh( new THREE.BoxGeometry( 9 , 2 , 2 ) , transp_mat_go);
-			gameoverbox.position.set( 5 , 10.5 , 4 );
-
-			//cameras: the first one is fixed on the player perspective while the second one is controlled through the mouse
-			var camera_player = new THREE.PerspectiveCamera( 55, window.innerWidth/window.innerHeight, 1, 50 );
-				 camera_player.position.set( 5, 9, 18 );
-
-			var camera_free = new THREE.PerspectiveCamera( 75, window.innerWidth/window.innerHeight, 0.1, 100 );
-				 camera_free.position.set( 2, 25, 8 );
-
-			var camera = 0; //default camera is the player one
-			var camera_error = false; //boolean to deal with camera errors
-
-			//mouse moves cameras
-			var controls = new THREE.OrbitControls( camera_player );
-				 controls.target = new THREE.Vector3( 5 , 9 , 0 );
-				 controls.enabled = false;
-			var controls_free = new THREE.OrbitControls( camera_free );
-
+			//renderer and cameras
 			var renderer = new THREE.WebGLRenderer( { antialias:true } );
 				 renderer.setSize( window.innerWidth, window.innerHeight );
 				 renderer.setClearColor( 0xf0f0f0 );
 				 document.body.appendChild( renderer.domElement );
 
-			//draw axes, useful for debugging
-			//Coordinates.drawAllAxes();
+			//cameras: the first one is fixed on the player perspective while the second one is controlled through the mouse
+			var camera_player = new THREE.PerspectiveCamera( 55, window.innerWidth/window.innerHeight, 1, 50 );
+				  camera_player.position.set( 5, 9, 18 );
 
-			//var grid = new THREE.GridHelper( 500, 1 ); draw grid, useful for debugging
-			// grid.setColors( 0x44ff44, 0x44aa44 );
-			//scene.add( grid );
+			var camera_free = new THREE.PerspectiveCamera( 75, window.innerWidth/window.innerHeight, 0.1, 100 );
+				  camera_free.position.set( 2, 25, 8 );
+
+			var camera = 0; //default camera is the player one
+			var camera_error = false; //boolean to deal with camera errors
+
+			//mouse moves cameras
+			var controls = new THREE.OrbitControls( camera_player, renderer.domElement );
+				  controls.target = new THREE.Vector3( 5 , 9 , 0 );
+				  controls.enabled = false;
+			var controls_free = new THREE.OrbitControls( camera_free, renderer.domElement );
 
 			//FPS stats
 			stats = new Stats();
 			stats.domElement.style.position = 'absolute';
 			stats.domElement.style.top = '0px';
 			document.body.appendChild( stats.domElement );
+
+			//gui
+			window.onload = function()
+			{
+				var game = {
+					changeCamera : function() {if(!camera_error) camera = (camera+1)%2;},
+					pauseGame : function() {if(!camera_error) {if(pause) {pause = false; if(resumereset) {resumereset = false; resetS();}} else pause = true;}},
+					speed : 1,
+					skins : 0
+				};
+
+				var gui = new dat.GUI({autoplace: false});
+
+				var camerabtn = gui.add( game, "changeCamera" ).name( "Change to free camera" ); //to change camera type
+				camerabtn.onChange(function(){if (camera==0) camerabtn.name("Change to player camera"); if (camera==1) camerabtn.name("Change to free camera");});
+				var pausebtn = gui.add( game, "pauseGame" ).name( "Pause" ); //to pause/resume game
+				pausebtn.onChange(function(){if (pause) pausebtn.name("Pause"); else pausebtn.name("Resume");});
+				var speedsldr = gui.add( game, "speed", 1, 5).name("Speed").step(1).onChange( function( value ){ speed = value; } ); //to change the animation speed
+				var skinslct = gui.add( game, 'skins', {Default: 0, Isles: 1, Inferno: 2}).name("Skins"); //to switch between skins
+			}
+
+			//adapt scene to window changes
+			window.addEventListener('resize',onWindowResize,false);
 
 			//main rendering function
 			function render()
@@ -398,120 +281,18 @@
 					{
 						switch (phase) //chose the right phase of animation
 						{
-							case 1:
-								if( active < 1) //begin of phase: position the two tetramins
-								{
-									updateScore(1203);
-									tetris1.position.set( 2 , 17 , -1 );
-									tetris2.position.set( next_x , next_y , next_z );
-									scene.add( tetris1 );
-									scene.add( tetris2 );
-									active = 1;
-								}
-								if(!(tetris1.position.y <= 12)) //until the main tetraming reached it's final position, move it
-									tetris1.position.set(tetris1.position.x, tetris1.position.y - 0.03, tetris1.position.z);
-								else
-									phase++; //phase ended, next one please
+							case 1: phase1();
 							break;
-
-							case 2:
-								if( active < 2) //begin of phase: position the two tetramins
-								{
-									updateScore(1209);
-									tetris2.position.set( 1 , 17 , -1 );
-									tetris3.position.set( next_x , next_y , next_z );
-									scene.add( tetris2 );
-									scene.add( tetris3 );
-									active = 2;
-								}
-								if(!(tetris2.position.y <= 13)) //until the main tetraming reached it's final position, move it
-									tetris2.position.set(tetris2.position.x, tetris2.position.y - 0.03, tetris2.position.z);
-								else
-									phase++; //phase ended, next one please
+							case 2: phase2();
 							break;
-
-							case 3:
-								if( active < 3) //begin of phase: position the two tetramins
-								{
-									updateScore(1214);
-									tetris3.position.set( 6 , 17 , -1 );
-									tetris4.position.set( next_x + 0.5 , next_y , next_z ); //yellow tetramin bad tetramin
-									scene.add( tetris3 );
-									scene.add( tetris4 );
-									active = 3;
-								}
-								if(!(tetris3.position.y <= 15)) //until the main tetraming reached it's rotation position, move it
-									tetris3.position.set(tetris3.position.x, tetris3.position.y - 0.03, tetris3.position.z);
-								else
-								{
-									if(!(tetris3.position.y <= 13)) //until the main tetraming reached it's final position, move it
-									{
-										if(!rot)
-										{
-											tetris3.rotation.z = Math.PI/2;
-											tetris3.position.set( tetris3.position.x + 1 , tetris3.position.y , tetris3.position.z );
-											rot = true;
-										}
-										tetris3.position.set(tetris3.position.x, tetris3.position.y - 0.03, tetris3.position.z);
-									}
-									else
-										phase++; //phase ended, next one please
-								}
-
+							case 3: phase3();
 							break;
-
-							case 4:
-								if( active < 4) //begin of phase: position the two tetramins
-								{
-									updateScore(1219);
-									tetris4.position.set( 4 , 17 , -1 );
-									tetris5.position.set( next_x , next_y , next_z );
-									scene.add( tetris4 );
-									scene.add( tetris5 );
-									active = 4;
-								}
-								if(!(tetris4.position.y <= 15)) //until the main tetraming reached it's final position, move it
-									tetris4.position.set(tetris4.position.x, tetris4.position.y - 0.03, tetris4.position.z);
-								else
-									phase++; //phase ended, next one please
-
+							case 4: phase4();
 							break;
-
-							case 5:
-								if( active < 5) //begin of phase: position the two tetramins
-								{
-									updateScore(1222);
-									tetris5.position.set( 5 , 17 , -1 );
-									tetris6.position.set( next_x , next_y , next_z );
-									scene.add( tetris5 );
-									scene.add( tetris6 );
-									active = 5;
-								}
-								if(!(tetris5.position.y <= 17)) //until the main tetraming reached it's final position, move it
-									tetris5.position.set(tetris5.position.x, tetris5.position.y - 0.03, tetris5.position.z);
-								else
-								{
-									phase++; //phase ended, final one please
-									reset = true;
-								}
-
+							case 5: phase5();
 							break;
-
-							case 6:
-								updateScore(1223);
-								scene.add(gameover);
-								scene.add(gameoverbox);
-								window.setTimeout(
-									function()
-									{
-										if(reset)
-										{
-											if(!pause) {resumereset = false; resetS();} //if after 1.5 seconds there's no pause, normally reset
-											else resumereset = true; //otherwise remember to reset on resume
-										}
-									} , 1500); //reset everything after two seconds
+							case 6: phase6();
 							break;
-
 							default:
 						}
 					}
@@ -526,20 +307,170 @@
 					controls_free.enabled = false;
 					controls.update();
 				}
-				else
+				if(camera==1) //camera is free: disable the fixed one and update the scene
 				{
-					if(camera==1) //camera is free: disable the fixed one and update the scene
-					{
-						renderer.render(scene, camera_free);
-						controls_free.enabled = true;
-						controls_free.update();
-					}
-					else //something went wrong and the rendering is stopped with an error
-					{
-						console.error("Unknown camera selected, please refresh the page to reset settings");
-						camera_error = true;
-					}
+					renderer.render(scene, camera_free);
+					controls_free.enabled = true;
+					controls_free.update();
 				}
+				if( camera != 0 && camera != 1 ) //something went wrong and the rendering is stopped with an error
+				{
+					console.error("Unknown camera selected, please refresh the page to reset settings");
+					camera_error = true;
+				}
+			}
+
+			//function to script phase 1 of the animation
+			function phase1()
+			{
+				if( active < 1) //begin of phase: position the two tetramins
+				{
+					updateScore(1203);
+					tetris1.position.set( 3 , 17 , -1 );
+					tetris2.position.set( next_x , next_y , next_z );
+					window.setTimeout( function(){shiftLeftSingle( tetris1 )}, 1500/speed); //horizontal shift asincrone from the vertical fall
+					scene.add( tetris1 );
+					scene.add( tetris2 );
+					active = 1;
+					transl = 1;
+					vtime = true;
+				}
+				if(vtime) //if the vertical step is permitted
+				{
+						if(!(tetris1.position.y <= 12)) //until the main tetramin reached it's final position, move it
+						{
+							fallSingle( tetris1 );
+							vtime = false;
+							window.setTimeout( function(){ vtime = true; } , 1000/speed);
+							//tetris1.position.set(tetris1.position.x, tetris1.position.y - speed*smult, tetris1.position.z);
+						}
+						else
+							phase++; //phase ended, next one please
+					}
+			}
+
+			//function to script phase 2 of the animation
+			function phase2()
+			{
+				if( active < 2) //begin of phase: position the two tetramins
+				{
+					updateScore(1209);
+					tetris2.position.set( 4 , 17 , -1 );
+					tetris3.position.set( next_x , next_y , next_z );
+					window.setTimeout( function(){ shiftLeftSingle( tetris2 );}, 700/speed );
+					window.setTimeout( function(){ shiftLeftSingle( tetris2 );}, 1200/speed );
+					scene.add( tetris2 );
+					scene.add( tetris3 );
+					active = 2;
+					transl = 2;
+					vtime = true;
+				}
+
+				if(vtime)
+				{
+					if(!(tetris2.position.y <= 13)) //until the main tetramin reached its final position
+					{
+							fallSingle( tetris2 );
+							vtime = false;
+							window.setTimeout( function(){ vtime = true; }, 1000/speed );
+					}
+					else
+						phase++;
+				}
+			}
+
+			//function to script phase 3 of the animation
+			function phase3()
+			{
+				if( active < 3) //begin of phase: position the two tetramins
+				{
+					updateScore(1214);
+					tetris3.position.set( 4 , 17 , -1 );
+					tetris4.position.set( next_x + 0.5 , next_y , next_z ); //yellow tetramin bad tetramin
+					window.setTimeout( function(){ tetris3.rotation.z = Math.PI/2; shiftRightSingle ( tetris3 ); shiftRightSingle ( tetris3 );}, 700/speed );
+					window.setTimeout( function(){ shiftRightSingle( tetris3 );}, 1500/speed );
+					scene.add( tetris3 );
+					scene.add( tetris4 );
+					active = 3;
+					vtime = true;
+				}
+
+				if(vtime)
+				{
+					if(!(tetris3.position.y <= 13)) //until the main tetramin reached its final position
+					{
+							fallSingle( tetris3 );
+							vtime = false;
+							window.setTimeout( function(){ vtime = true; }, 1000/speed );
+					}
+					else
+						phase++;
+				}
+			}
+
+			//function to script phase 4 of the animation
+			function phase4()
+			{
+				if( active < 4) //begin of phase: position the two tetramins
+				{
+					updateScore(1219);
+					tetris4.position.set( 4 , 17 , -1 );
+					tetris5.position.set( next_x , next_y , next_z );
+					scene.add( tetris4 );
+					scene.add( tetris5 );
+					active = 4;
+					vtime = true;
+				}
+				if(vtime)
+				{
+					if(!(tetris4.position.y <= 15)) //until the main tetramin reached its final position
+					{
+							fallSingle( tetris4 );
+							vtime = false;
+							window.setTimeout( function(){ vtime = true; }, 1000/speed );
+					}
+					else
+						phase++;
+				}
+			}
+
+			//function to script phase 5 of the animation
+			function phase5()
+			{
+					if( active < 5) //begin of phase: position the two tetramins
+					{
+						updateScore(1222);
+						tetris5.position.set( 4 , 17 , -1 );
+						tetris6.position.set( next_x , next_y , next_z );
+						scene.add( tetris5 );
+						scene.add( tetris6 );
+						active = 5;
+						vtime = true;
+					}
+					if(vtime)
+					{
+						if(!(tetris5.position.y <= 17)) //until the main tetramin reached its final position
+						{
+								fallSingle( tetris5 );
+								vtime = false;
+								window.setTimeout( function(){ vtime = true; }, 1000/speed );
+						}
+						else
+						{
+							phase++;
+							reset = true;
+						}
+					}
+			}
+
+			//function to script phase 6 of the animation
+			function phase6()
+			{
+				updateScore(1223);
+				scene.add(gameover);
+				scene.add(gameoverbox);
+				//if after 1.5 seconds there's no pause, reset. Otherwise remember to reset on resume
+				window.setTimeout( function(){ if(reset){ if(!pause){ resumereset = false; resetS(); } else resumereset = true; } } , 1500);
 			}
 
 			//function to change the score of the game
@@ -551,7 +482,6 @@
 				score.position.set( score_x + 2.7 , score_y , score_z );
 				scene.add(score);
 			}
-
 
 			//function to reset scene to phase 1
 			function resetS()
@@ -565,7 +495,170 @@
 				phase=1;
 				reset = false;
 			}
-			
+
+			//function to adjust the scene when the window risizes
+			function onWindowResize()
+			{
+				canvasWidth = window.innerWidth;
+				canvasHeight = window.innerHeight;
+				renderer.setSize(canvasWidth,canvasHeight);
+				camera_player.aspect = canvasWidth/canvasHeight;
+				camera_player.updateProjectionMatrix();
+				camera_free.aspect = canvasWidth/canvasHeight;
+				camera_free.updateProjectionMatrix();
+			}
+
+			//function to create and position the two walls
+			function instantiateWalls()
+			{
+				var wallx = 1; var wally = 18; var wallz = 2;
+				var wall_geometry = new THREE.BoxGeometry( wallx , wally , wallz );
+
+				var wall_material = new THREE.MeshBasicMaterial();
+				tex_wall.wrapS = tex_wall.wrapT = THREE.RepeatWrapping;
+				tex_wall.repeat.set( wallx, wally );
+				wall_material.map = tex_wall;
+
+				var wall_material1 = new THREE.MeshBasicMaterial();
+				tex_wall1.wrapS = tex_wall1.wrapT = THREE.RepeatWrapping;
+				tex_wall1.repeat.set( wallx , wallz );
+				wall_material1.map = tex_wall1;
+
+				var wall_material2 = new THREE.MeshBasicMaterial();
+				tex_wall2.wrapS = tex_wall2.wrapT = THREE.RepeatWrapping;
+				tex_wall2.repeat.set( wallz , wally );
+				wall_material2.map = tex_wall2;
+
+				var wallMats = [
+					wall_material2, //right
+					wall_material2, //left
+					wall_material1, //above
+					wall_material1, //under
+					wall_material, //front
+					wall_material, //back
+				];
+
+				wallL = new THREE.Mesh( wall_geometry , new THREE.MeshFaceMaterial(wallMats));
+				wallR = new THREE.Mesh( wall_geometry , new THREE.MeshFaceMaterial(wallMats) );
+				wallL.position.set( 0 - (wallx / 2) , wally / 2 , -1);
+				wallR.position.set(10 + (wallx / 2) , wally / 2 , -1);
+				scene.add(wallL);
+				scene.add(wallR);
+				wallL.matrixAutoUpdate = false; wallL.updateMatrix();
+				wallR.matrixAutoUpdate = false; wallR.updateMatrix();
+			}
+
+			//function to create and position the eventual background
+			function instantiateBackground()
+			{
+				var backb = 100; var backh = 40; var backcolor = 0x000000;
+				var backx = 0; var backy = 20; var backz = -2.01;
+				var back_geometry = new THREE.PlaneBufferGeometry( backb , backh );
+				var back_material = new THREE.MeshBasicMaterial( { color: backcolor, side: THREE.DoubleSide } );
+				back = new THREE.Mesh(back_geometry, back_material);
+				back.position.set( backx , backy , backz );
+				scene.add(back);
+				back.matrixAutoUpdate = false; back.updateMatrix();
+			}
+
+			//function to create and position the terrain
+			function instantiateTerrain()
+			{
+				var terrainb = 150; var terrainh = 50; var terraincolor = 0x6C7058;
+				var terrainx = 0; var terrainy = -0.05; var terrainz = 0;
+				var terrain_geometry = new THREE.PlaneBufferGeometry( terrainb , terrainh );
+				var terrain_material = new THREE.MeshBasicMaterial( { color: terraincolor, side: THREE.DoubleSide } );
+				terrain = new THREE.Mesh( terrain_geometry , terrain_material );
+				terrain.rotation.x = Math.PI / 2;
+				terrain.position.set( terrainx , terrainy , terrainz );
+				scene.add(terrain);
+				terrain.matrixAutoUpdate = false; terrain.updateMatrix();
+			}
+
+			//function to create and position the level text and its box
+			function instantiateLevel()
+			{
+				var level_geom = new THREE.TextGeometry("LEVEL 2", {font: 'helvetiker',  size: 0.7, height: 0.1, curveSegments: 1});
+				level = new THREE.Mesh( level_geom, new THREE.MeshBasicMaterial( {color: "white" } ) );
+				level.position.set( level_x , level_y , level_z );
+				scene.add( level );
+				level.matrixAutoUpdate = false;
+				level.updateMatrix();
+
+				var levelboxx = 4.5; var levelboxy = 2; var levelboxz = 1;
+				levelbox = new THREE.Mesh( new THREE.BoxGeometry( levelboxx , levelboxy , levelboxz ) , transp_mat);
+				levelbox.position.set( level_x + 2 , level_y , level_z );
+				scene.add( levelbox );
+				levelbox.matrixAutoUpdate = false;
+				levelbox.updateMatrix();
+			}
+
+			//function to create and position the score text and its box
+			function instantiateScore()
+			{
+				var score_geom = new THREE.TextGeometry("SCORE : ", {font: 'helvetiker',  size: 0.5, height: 0.1, curveSegments: 1});
+				scoreT = new THREE.Mesh( score_geom,  score_mat);
+				scoreT.position.set( score_x , score_y , score_z );
+				scene.add(scoreT);
+				scoreT.matrixAutoUpdate = false;
+				scoreT.updateMatrix();
+
+				var scoreboxx = 4.5; var scoreboxy = 2; var scoreboxz = 1;
+				scorebox = new THREE.Mesh( new THREE.BoxGeometry( scoreboxx , scoreboxy , scoreboxz ) , transp_mat);
+				scorebox.position.set( score_x + 2 , score_y , score_z );
+				scene.add(scorebox);
+				scorebox.matrixAutoUpdate = false;
+				scorebox.updateMatrix();
+			}
+
+			//function to create and position the gameover text and its box
+			function instantiateGameover()
+			{
+				var gox = 1; var goy = 10; var goz = 4;
+				var gameover_geom = new THREE.TextGeometry("GAME OVER", {font: 'helvetiker',  size: 1, height: 0.5, curveSegments: 1});
+				gameover = new THREE.Mesh( gameover_geom, new THREE.MeshBasicMaterial( {color: "red" } ) );
+				gameover.position.set( gox , goy , goz );
+
+				var goboxx = 9; var goboxy = 2; var goboxz = 2;
+				gameoverbox = new THREE.Mesh( new THREE.BoxGeometry( goboxx , goboxy , goboxz ) , transp_mat_go);
+				gameoverbox.position.set( gox + 4 , goy + 0.5 , goz );
+			}
+
+			//function to create and position the next text and its box
+			function instantiateNext()
+			{
+				var next_geom = new THREE.TextGeometry("NEXT", {font: 'helvetiker',  size: 0.7, height: 0.1, curveSegments: 1});
+				next = new THREE.Mesh( next_geom, new THREE.MeshBasicMaterial( {color: "white" } ) );
+				next.position.set( next_x+0.5 , next_y+3 , next_z+0.5 );
+				scene.add(next);
+				next.matrixAutoUpdate = false;
+				next.updateMatrix();
+
+				var nextboxx = 4; var nextboxy = 5; var nextboxz = 2;
+				nextbox = new THREE.Mesh( new THREE.BoxGeometry( nextboxx , nextboxy , nextboxz ) , transp_mat);
+				nextbox.position.set(next_x + 1.5 , next_y+2 , next_z+0.5);
+				scene.add(nextbox);
+				nextbox.matrixAutoUpdate = false;
+				nextbox.updateMatrix();
+			}
+
+			//function to make a vertical step towards the y=0 plane
+			function fallSingle( piece )
+			{
+					piece.position.set( piece.position.x , piece.position.y - 1 , piece.position.z )
+			}
+
+			//function to make an horizontal step towards the x=0 plane
+			function shiftLeftSingle( piece )
+			{
+					piece.position.set( piece.position.x - 1 , piece.position.y , piece.position.z )
+			}
+
+			//function to make an horizontal step far from the x=0 plane
+			function shiftRightSingle( piece )
+			{
+					piece.position.set( piece.position.x + 1 , piece.position.y , piece.position.z )
+			}
 		</script>
 	</body>
 </html>
