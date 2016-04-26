@@ -92,7 +92,23 @@
 			var tloader = new THREE.TextureLoader( manager );
 			tloader.load(
 				path + "Tetris3D/media/brick128.png",
-				function ( texture ) { tex_wall = tex_wall1 = tex_wall2 = texture; }
+				function ( texture ) {
+					tex_wall = texture;
+				}
+			);
+
+			tloader.load(
+				path + "Tetris3D/media/brick128.png",
+				function ( texture ) {
+					tex_wall1 = texture;
+				}
+			);
+
+			tloader.load(
+				path + "Tetris3D/media/brick128.png",
+				function ( texture ) {
+					tex_wall2 = texture;
+				}
 			);
 
 			//loading all models and spawning static tetramins
@@ -342,7 +358,6 @@
 							fallSingle( tetris1 );
 							vtime = false;
 							window.setTimeout( function(){ vtime = true; } , 1000/speed);
-							//tetris1.position.set(tetris1.position.x, tetris1.position.y - speed*smult, tetris1.position.z);
 						}
 						else
 							phase++; //phase ended, next one please
@@ -447,30 +462,22 @@
 						active = 5;
 						vtime = true;
 					}
-					if(vtime)
-					{
-						if(!(tetris5.position.y <= 17)) //until the main tetramin reached its final position
-						{
-								fallSingle( tetris5 );
-								vtime = false;
-								window.setTimeout( function(){ vtime = true; }, 1000/speed );
-						}
-						else
-						{
-							phase++;
-							reset = true;
-						}
-					}
+					phase++;
+					reset = true;
 			}
 
 			//function to script phase 6 of the animation
 			function phase6()
 			{
-				updateScore(1223);
-				scene.add(gameover);
-				scene.add(gameoverbox);
-				//if after 1.5 seconds there's no pause, reset. Otherwise remember to reset on resume
-				window.setTimeout( function(){ if(reset){ if(!pause){ resumereset = false; resetS(); } else resumereset = true; } } , 1500);
+				if(vtime)
+				{
+					updateScore(1223);
+					scene.add(gameover);
+					scene.add(gameoverbox);
+					//if after 1.5 seconds there's no pause, reset. Otherwise remember to reset on resume
+					window.setTimeout( function(){ if(reset){ if(!pause){ resumereset = false; resetS(); } else resumereset = true; } } , 1500);
+					vtime = false;
+				}
 			}
 
 			//function to change the score of the game
@@ -492,7 +499,7 @@
 				active = 0;
 				tetris3 = new THREE.Mesh( red_geom , red_mat ); //reset the rotating tetramin
 				rot = false;
-				phase=1;
+				phase = 1;
 				reset = false;
 			}
 
@@ -525,7 +532,7 @@
 				wall_material1.map = tex_wall1;
 
 				var wall_material2 = new THREE.MeshBasicMaterial();
-				tex_wall2.wrapS = tex_wall2.wrapT = THREE.RepeatWrapping;
+			  tex_wall2.wrapS = tex_wall2.wrapT = THREE.RepeatWrapping;
 				tex_wall2.repeat.set( wallz , wally );
 				wall_material2.map = tex_wall2;
 
