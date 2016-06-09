@@ -15,50 +15,107 @@
 		<script src="lib/Coordinates.js"></script>
 		<script src="lib/Detector.js"></script>
 		<script src="media/helvetiker_regular.typeface.js"></script>
+		<script src="lib/jquery-1.8.3.min.js"></script>
+		<script src="lib/ShaderLoader.min.js"></script>
+		<script src="lib/tween.js"></script>
+		
+		<script src="lib/EffectComposer.js"></script>
+		<script src="lib/ShaderPass.js"></script>
+		<script src="lib/RenderPass.js"></script>
+		<script src="lib/MaskPass.js"></script>
+		<script src="lib/CopyShader.js"></script>
 	</head>
 	<body>
+		<script data-src="shaders/micro1.js" data-name="micro1" type="x-shader/x-vertex"></script>
+		<script data-src="shaders/micro2.js" data-name="micro2" type="x-shader/x-fragment"></script>
+		<script data-src="shaders/waterv.js" data-name="waterv" type="x-shader/x-vertex"></script>
+		<script data-src="shaders/waterf.js" data-name="waterf" type="x-shader/x-fragment"></script>
+		<script data-src="shaders/envv.js" data-name="envv" type="x-shader/x-vertex"></script>
+		<script data-src="shaders/envf.js" data-name="envf" type="x-shader/x-fragment"></script>
+		<script data-src="shaders/basev.js" data-name="basev" type="x-shader/x-vertex"></script>
+		<script data-src="shaders/basef.js" data-name="basef" type="x-shader/x-fragment"></script>
+		<script data-src="shaders/wallv.js" data-name="wallv" type="x-shader/x-vertex"></script>
+		<script data-src="shaders/wallf.js" data-name="wallf" type="x-shader/x-fragment"></script>
+		<script  type="text/x-glsl" id="ttvs">
+			uniform vec3 pointLightPosition[2]; //positions for lights
+
+			varying vec3 transformedNormal;
+			varying vec3 lVector[2];
+
+			void main() {
+				transformedNormal = normalMatrix * normal;
+				vec3 pointPosition = (modelViewMatrix * vec4( position, 1.0 )).xyz;
+				
+				for( int i = 0; i < 2; i++ )
+				{
+					vec4 lPosition = viewMatrix * vec4( pointLightPosition[i], 1.0 );
+					lVector[i] = lPosition.xyz - pointPosition;
+				}
+				
+				gl_Position = projectionMatrix * vec4(pointPosition,1.0);
+			}
+		</script>
+		<script  type="text/x-glsl" id="ttfs">
+			uniform vec3 lightPower[2]; //powers for lights
+			uniform vec3 rho; //surface coefficient
+			uniform vec3 ambient; //ambient color
+			uniform float wthrp; //weather weight
+
+			varying vec3 transformedNormal;
+			varying vec3 lVector[2];
+
+			const float PI = 3.14159;
+
+			void main() {
+			
+				vec3 beta = vec3( 0.0, 0.0, 0.0 );
+				
+				for( int i = 0; i < 2; i++)
+				{
+					vec3 color = lightPower[i] / ( 4.0 * PI * pow( length(lVector[i]),2.0) );
+					vec3 lightVector = normalize( lVector[i] );
+					float dotProduct = dot( transformedNormal, lightVector );
+					float pointLightWeighting = max( dotProduct, 0.0 );
+					beta += color * pointLightWeighting * rho/PI;
+				}
+				
+				gl_FragColor = vec4( ambient + beta * ( 1.0 - wthrp ), 1.0);
+			}
+		</script>
 		<script>
 			if ( ! Detector.webgl ) Detector.addGetWebGLMessage();
-
-			//retrive the current path, differently from local and remote modes
-			var path = "";
-			if(window.location.origin == "file://")
-			{
-				path = "http://localhost:8080/";
-			}
-			else
-				path = window.location.origin+"/";
-
-			//THREE.ImageUtils.crossOrigin = '';
 
 			//what to do after initialization
 			var manager = new THREE.LoadingManager();
 			manager.onLoad = function ( item, loaded, total ) {
 				//instantiate ambiental elements
-				instantiateWalls();
-				instantiateBackground();
-				instantiateTerrain();
+				wtime = Math.random() * 2 * Math.PI;
+				instantiateLights();
+				for(var i = 0; i < staticT.children.length; i++)
+					staticT.children[i].castShadow = true;
 				scene.add(staticT);
 				instantiateGameover();
 				instantiateLevel();
 				instantiateScore();
 				instantiateNext();
+				instantiateRain();
 				//instantiate moving tetramins
-				tetris1 = new THREE.Mesh( lightblue_geom , lightblue_mat );
-				tetris2 = new THREE.Mesh( purple_geom , purple_mat );
-				tetris3 = new THREE.Mesh( red_geom , red_mat );
-				tetris4 = new THREE.Mesh( yellow_geom , yellow_mat );
-				tetris5 = new THREE.Mesh( blue_geom , blue_mat );
-				tetris6 = new THREE.Mesh( green_geom , green_mat );
+				tetris1 = new THREE.Mesh( lightblue_geom , lightblue_mat ); tetris1.castShadow = true;
+				tetris2 = new THREE.Mesh( purple_geom , purple_mat ); tetris2.castShadow = true;
+				tetris3 = new THREE.Mesh( red_geom , red_mat ); tetris3.castShadow = true;
+				tetris4 = new THREE.Mesh( yellow_geom , yellow_mat ); tetris4.castShadow = true;
+				tetris5 = new THREE.Mesh( blue_geom , blue_mat ); tetris5.castShadow = true;
+				tetris6 = new THREE.Mesh( green_geom , green_mat ); tetris6.castShadow = true;
 				//render image when everything is ready
 				render();
+				animateSunMoon();
 			};
 
 			//global variables
+			var anim; //animation var
 			var staticT; //aggregate object of static tetramins;
-			var tex_wall, tex_wall1, tex_wall2; //textures for the wall
+			var tex_wall, tex_wall1, tex_wall2, tex_fluo; //textures for the wall
 			var wallL, wallR; //wall objects
-			var back; //background object
 			var terrain; //terrain object
 			var gameover; var gameoverbox; //gameover objects
 			var level; var levelbox; //level objects
@@ -67,12 +124,22 @@
 			var blue_geom, green_geom, red_geom, purple_geom, yellow_geom, orange_geom, lightblue_geom; //tetramins geometries to be loaded
 			var blue_mat, green_mat, red_mat, purple_mat, yellow_mat, orange_mat, lightblue_mat; //tetramins materials to be loaded
 			var tetris1, tetris2, tetris3, tetris4, tetris5, tetris6; //tetramins to be moved around
+			var water; //water plane
+			var environment; //environment sphere
+			
+			var sun; var moon; //lights
+			var tween; //tween objects
+			var active_tween; //which animation is being executed
+			var sunp; var moonp; //light power
+			var maxsunh; var maxmoonh; //max light height
+			var sunpow; var moonpow; //base light power
+			var weather; //weather light
+			var wtime; //weather time
+			var rain; //is it raining?
+			var particles; //particle array
+			var particleSystem; //particle system
+			
 			var vtime; //used to discretize the falling animation
-
-			//global parameters
-			var next_x = 13; var next_y = 6; var next_z = -1; //default position for next tetramin
-			var score_x = 10.5; var score_y = 12; var score_z = 3; //default position for score text
-			var level_x = -5; var level_y = 15; var level_z = 2; //default position for level text
 			var active = 0; //number of current tetramin active
 			var phase = 1; //phase of the animation, from 1 to 6 (game over);
 			var rot = false; //used to rotate only once
@@ -81,137 +148,119 @@
 			var score; //actual score
 			var pause = false; //pause on/off
 			var resumereset = false; //resume must reset due to pause called on gameover?
-			var speed = 1; var smult = 0.03;
+			var fluo = false;
+			var fluoEffect;
 
+			//global parameters
+			var next_pos = [ 13 , 6 , -1 ]; //default position for next tetramin
+			var score_pos = [ 10.5 , 12 , 3 ]; //default position for score text
+			var level_pos = [ -5 , 15 , 2 ]; //default position for level text
+			var speed = 1; var smult = 0.03; //default speed and vertical shift distance
+			var ansteps = 8;
+			
+			//tween positions
+			var tween_pos = Array(ansteps); 
+			tween_pos[0] = {x:100, y:0, z:25}; tween_pos[1] = {x:60, y:80, z:17}; tween_pos[2] = {x:0, y:120, z:9};
+			tween_pos[3] = {x:-60, y:80, z:2}; tween_pos[4] = {x:-100, y:0, z:7}; tween_pos[5] = {x:-60, y:-80, z:13};
+			tween_pos[6] = {x:0, y:-120, z:18}; tween_pos[7] = {x:60, y:-80, z:29};
+			
+			//water uniform parameters
+			var wuniforms = {
+				pointLightPosition : {type: "v3v", value : [ new THREE.Vector3(), new THREE.Vector3() ]},
+				lightPower : {type: "v3v", value : [ new THREE.Vector3(), new THREE.Vector3() ]},
+				c_spec : {type: "v3", value : new THREE.Vector3()},
+				alpha : {type: "f", value: 0.0},
+				diffuseMap : {},
+				s : {type: "f", value: 0.0},
+				time : {type: "f", value: 0.0},
+				ambient : {type : "v3", value : new THREE.Vector3()},
+				resolution : {type : "f", value : 0.0},
+				wthrp : {type : "f", value : 0},
+				visibility : {type : "f", value : 0.0}
+			};
+			
+			//environment uniform parameters
+			var envuniforms = {
+				pointLightPosition : {type: "v3v", value : [new THREE.Vector3(), new THREE.Vector3()]},
+				diffuseMap : {},
+				repetition : {type : "f", value : new THREE.Vector2()},
+				ambient : {type : "v3", value : new THREE.Vector3()},
+				wthrp : {type : "f", value : 0},
+				lmaxh : {type : "fv1", value : []}
+			};
+			
+			//base uniform parameters
+			var baseuniforms = THREE.UniformsUtils.merge([
+				THREE.UniformsLib[ "shadowmap" ],
+				{
+					pointLightPosition : {type : "v3", value : new THREE.Vector3()},
+					mpointLightPosition : {type : "v3", value : new THREE.Vector3()},
+					lightPower : {type : "v3", value : new THREE.Vector3()},
+					mlightPower : {type : "v3", value : new THREE.Vector3()},
+					c_spec : {type : "v3", value : new THREE.Vector3()},
+					alpha : {type : "f", value: 0},
+					diffuseMap : {},
+					s : {type : "f", value : 0.0},
+					ambient : {type : "v3", value : new THREE.Vector3()},
+					wthrp : {type : "f", value : 0}
+				}
+			]);
+			
+			//wall uniform parameters
+			var muniforms = {
+				pointLightPosition : {type : "v3v", value : new THREE.Vector3()},
+				lightPower : {type: "v3v", value : [ new THREE.Vector3(), new THREE.Vector3() ]},
+				c_spec : {type: "v3", value : new THREE.Vector3()},
+				alpha : {type: "f", value: 0.0},
+				diffuseMap : {},
+				s : {type: "f", value: 0.0},
+				ambient : {type : "v3", value : new THREE.Vector3()},
+				wthrp : {type : "f", value : 0},
+				repetition : {type : "v2", value : new THREE.Vector2()},
+				visibility : {type : "f", value : 0.0},
+				rho : {type : "v3", value : new THREE.Vector3()}
+			};
+			
+			var mmuniforms = new Array(3);
+			for(var i = 0; i < mmuniforms.length; i++) //get a new uniform object for every wall side
+				mmuniforms[i] = jQuery.extend(true, {}, muniforms);
+				
+			//tetramin uniform parameters
+			var tuniforms = THREE.UniformsUtils.merge([
+				THREE.UniformsLib[ "shadowmap" ],
+				{
+					 pointLightPosition : {type : "v3v", value : [ new THREE.Vector3(), new THREE.Vector3(0,0,0) ]},
+					 lightPower : {type : "v3v", value : [ new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,0) ]},
+					 rho : {type : "v3", value : new THREE.Vector3(0,0,0)},
+					 ambient : {type : "v3", value : new THREE.Vector3()},
+					 wthrp : {type : "f", value : 0}
+				 }
+			]);
+			var ttuniforms = new Array(7);
+			for(var i = 0; i < ttuniforms.length; i++) //get a new uniform object for every tetramin
+				ttuniforms[i] = jQuery.extend(true, {}, tuniforms);
+				
+			var ttvs = document.getElementById("ttvs").textContent;
+			var ttfs = document.getElementById("ttfs").textContent;
+			
 			//scene creation
 			var scene = new THREE.Scene();
-			scene.fog = new THREE.FogExp2( 0xF4FF89, 0.015 );
 			var staticT = new THREE.Object3D(); //all static tetramins can be moved together
-
-			//Loading textures
-			var tloader = new THREE.TextureLoader( manager );
-			tloader.load(
-				path + "Tetris3D/media/brick128.png",
-				function ( texture ) {
-					tex_wall = texture;
-				}
-			);
-
-			tloader.load(
-				path + "Tetris3D/media/brick128.png",
-				function ( texture ) {
-					tex_wall1 = texture;
-				}
-			);
-
-			tloader.load(
-				path + "Tetris3D/media/brick128.png",
-				function ( texture ) {
-					tex_wall2 = texture;
-				}
-			);
 
 			//loading all models and spawning static tetramins
 			var loader = new THREE.OBJLoader(manager);
-
-			//BLUE TETRIS
-			loader.load( path + "Tetris3D/media/tetris_blue.obj" ,
-				function ( object ) {object.traverse(function (child) {
-				   if (child instanceof THREE.Mesh)
-					{
-						blue_mat = new THREE.MeshBasicMaterial( { color: 0x004EE4 } );
-						var tetris = new THREE.Mesh( child.geometry , blue_mat ); tetris.position.set( 9 , 6 , -1 ); tetris.rotation.z = Math.PI/2; staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
-						blue_geom = child.geometry.clone();
-					}
-				})}
+			tetraminsLoad();
+			
+			//loading all shaders and shaded meshes
+			SHADER_LOADER.load(
+				function(data){
+					instantiateWater(data.waterv.vertex,data.waterf.fragment);
+					instantiateEnv(data.envv.vertex, data.envf.fragment);
+					instantiateTerrain(data.basev.vertex, data.basef.fragment);
+					instantiateWalls(data.wallv.vertex, data.wallf.fragment);
+				}
 			);
-
-			//GREEN TETRIS
-			loader.load( path + "Tetris3D/media/tetris_green.obj" ,
-				function ( object ) {object.traverse(function (child) {
-				   if (child instanceof THREE.Mesh)
-					{
-						green_mat = new THREE.MeshBasicMaterial( { color: 0x00E427 } );
-						var tetris = new THREE.Mesh( child.geometry , green_mat ); tetris.position.set( 10 , 0 , -1 ); tetris.rotation.z = Math.PI/2; staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
-						var tetris = new THREE.Mesh( child.geometry , green_mat ); tetris.position.set( 0 , 8 , -1 ); staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
-						green_geom = child.geometry.clone();
-					}
-				})}
-			);
-
-			//RED TETRIS
-			loader.load( path + "Tetris3D/media/tetris_red.obj" ,
-				function ( object ) {object.traverse(function (child) {
-				   if (child instanceof THREE.Mesh)
-					{
-						red_mat = new THREE.MeshBasicMaterial( { color: 0xE40027 } );
-						var tetris = new THREE.Mesh( child.geometry , red_mat ); tetris.position.set( 4 , 0 , -1 ); tetris.rotation.z = Math.PI/2; staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
-						var tetris = new THREE.Mesh( child.geometry , red_mat ); tetris.position.set( 8 , 0 , -1 ); tetris.rotation.z = Math.PI/2; staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
-						red_geom = child.geometry.clone();
-					}
-				})}
-			);
-
-			//YELLOW TETRIS
-			loader.load( path + "Tetris3D/media/tetris_yellow.obj" ,
-				function ( object ) {object.traverse(function (child) {
-				   if (child instanceof THREE.Mesh)
-					{
-						yellow_mat = new THREE.MeshBasicMaterial( { color: 0xE4DE00 } );
-						var tetris = new THREE.Mesh(child.geometry, yellow_mat); tetris.position.set( 0 , 0 , -1 ); staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
-						var tetris = new THREE.Mesh(child.geometry, yellow_mat); tetris.position.set( 0 , 5 , -1 ); staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
-						var tetris = new THREE.Mesh(child.geometry, yellow_mat); tetris.position.set( 7 , 3 , -1 ); staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
-						var tetris = new THREE.Mesh(child.geometry, yellow_mat); tetris.position.set( 2 , 10 , -1 ); staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
-						var tetris = new THREE.Mesh(child.geometry, yellow_mat); tetris.position.set( 4 , 9 , -1 ); staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
-						yellow_geom = child.geometry.clone();
-					}
-				})}
-			);
-
-			//PURPLE TETRIS
-			loader.load( path + "Tetris3D/media/tetris_purple.obj" ,
-				function ( object ) {object.traverse(function (child) {
-				   if (child instanceof THREE.Mesh)
-					{
-						purple_mat = new THREE.MeshBasicMaterial( { color: 0x9C13E4 } );
-						var tetris = new THREE.Mesh( child.geometry , purple_mat ); tetris.position.set( 2 , 6 , -1 ); tetris.rotation.z = -Math.PI/2; staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
-						var tetris = new THREE.Mesh( child.geometry , purple_mat ); tetris.position.set( 4 , 8 , -1 ); tetris.rotation.z = -Math.PI/2; staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
-						var tetris = new THREE.Mesh( child.geometry , purple_mat ); tetris.position.set( 2 , 10 , -1 ); tetris.rotation.z = Math.PI/2; staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
-						var tetris = new THREE.Mesh( child.geometry , purple_mat ); tetris.position.set( 6 , 9 , -1 ); staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
-						purple_geom = child.geometry.clone();
-					}
-				})}
-			);
-
-			//ORANGE TETRIS
-			loader.load( path + "Tetris3D/media/tetris_orange.obj" ,
-				function ( object ) {object.traverse(function (child) {
-				   if (child instanceof THREE.Mesh)
-					{
-						orange_mat = new THREE.MeshBasicMaterial( { color: 0xE46200 } );
-						var tetris = new THREE.Mesh( child.geometry , orange_mat );  tetris.position.set( 1 , 5 , -1 ); tetris.rotation.z =  -Math.PI/2; staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
-						var tetris = new THREE.Mesh( child.geometry , orange_mat );  tetris.position.set( 5 , 7 , -1 ); staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
-						var tetris = new THREE.Mesh( child.geometry , orange_mat );  tetris.position.set( 8 , 13 , -1 ); tetris.rotation.z =  -Math.PI/2; staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
-						orange_geom = child.geometry.clone();
-					}
-				})}
-			);
-
-			//LIGHTBLUE TETRIS
-			loader.load( path + "Tetris3D/media/tetris_lightblue.obj" ,
-				function ( object ) {object.traverse(function (child) {
-				   if (child instanceof THREE.Mesh)
-					{
-						lightblue_mat = new THREE.MeshBasicMaterial( { color: 0x00E4E4 } );
-						var tetris = new THREE.Mesh( child.geometry , lightblue_mat ); tetris.position.set( 6 , 0 , -1 ); tetris.rotation.z = Math.PI/2; staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
-						var tetris = new THREE.Mesh( child.geometry , lightblue_mat ); tetris.position.set( 5 , 5 , -1 ); staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
-						var tetris = new THREE.Mesh( child.geometry , lightblue_mat ); tetris.position.set( 2 , 8 , -1 ); staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
-						var tetris = new THREE.Mesh( child.geometry , lightblue_mat ); tetris.position.set( 7 , 10 , -1 ); tetris.rotation.z = Math.PI/2; staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
-						lightblue_geom = child.geometry.clone();
-					}
-				})}
-			);
-
+			
 			//material for the score mesh
 			var score_mat = new THREE.MeshBasicMaterial( {color: "white" } );
 
@@ -237,30 +286,100 @@
 				transparent: true
 			});
 
-			//renderer and cameras
-			var renderer = new THREE.WebGLRenderer( { antialias:true } );
+			//renderer
+			var renderer = new THREE.WebGLRenderer();
+				 renderer.shadowMapEnabled = true;
+				 renderer.shadowMapType = THREE.PCFSoftShadowMap;
 				 renderer.setSize( window.innerWidth, window.innerHeight );
-				 renderer.setClearColor( 0xf0f0f0 );
+				 renderer.setClearColor( 0xffffff );
+				 //renderer.gammaInput = true;
+				 //renderer.antialias = true;
 				 document.body.appendChild( renderer.domElement );
 
 			//cameras: the first one is fixed on the player perspective while the second one is controlled through the mouse
-			var camera_player = new THREE.PerspectiveCamera( 55, window.innerWidth/window.innerHeight, 1, 50 );
-				  camera_player.position.set( 5, 9, 18 );
+			var camera_player = new THREE.PerspectiveCamera( 55, window.innerWidth/window.innerHeight, 1, 400 );
+				 camera_player.position.set( 5, 9, 18 );
 
-			var camera_free = new THREE.PerspectiveCamera( 75, window.innerWidth/window.innerHeight, 0.1, 100 );
-				  camera_free.position.set( 2, 25, 8 );
+			var camera_free = new THREE.PerspectiveCamera( 75, window.innerWidth/window.innerHeight, 0.1, 400 );
+				 camera_free.position.set( 2, 25, 8 );
 
 			var camera = 0; //default camera is the player one
 			var camera_error = false; //boolean to deal with camera errors
 
 			//mouse moves cameras
 			var controls = new THREE.OrbitControls( camera_player, renderer.domElement );
-				  controls.target = new THREE.Vector3( 5 , 9 , 0 );
-				  controls.enabled = false;
+				 controls.target = new THREE.Vector3( 5 , 9 , 0 );
+				 controls.enabled = false;
 			var controls_free = new THREE.OrbitControls( camera_free, renderer.domElement );
+				 controls_free.maxPolarAngle = Math.PI/2 - 0.04; 
+				 
+			//composers and shader for post-processing
+			outlineShader = {
+				uniforms: {
+					"tDiffuse": { type: "t", value: null },
+					"width": { type: "f", value: 0.0 },
+					"height": { type: "f", value: 0.0 },
+				},
+				
+				vertexShader: [
+					"varying vec2 vUv;",
+					"void main() {",
+						"vUv = uv;",
+						"gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );",
+					"}"
+				].join("\n"),
+
+				fragmentShader: [
+					"uniform sampler2D tDiffuse;",
+					"varying vec2 vUv;",
+					"uniform float width;",
+					"uniform float height;",
+
+					"void main(void)",
+					"{",
+						"float step_w = 1.0/width;",
+						"float step_h = 1.0/height;",
+					
+						"vec2 offset[9];",
+						"offset[0] = vec2(-step_w, -step_h);",
+						"offset[1] = vec2(0.0, -step_h);", 
+						"offset[2] = vec2(step_w, -step_h);",
+						"offset[3] = vec2(-step_w, 0.0);",
+						"offset[4] = vec2(0.0, 0.0);",
+						"offset[5] = vec2(step_w, 0.0);",
+						"offset[6] = vec2(-step_w, step_h);",
+						"offset[7] = vec2(0.0, step_h);",
+						"offset[8] = vec2(step_w, step_h);",	
+						"float sample[9];",
+	   
+					   "for( int i=0; i<9; i++ )",
+							"sample[i]= length(texture2D(tDiffuse, vUv + offset[i]).rgb);",
+						"float horizEdge = sample[0] + (2.0*sample[1]) + sample[2] - (sample[6] + (2.0*sample[7]) + sample[8]);",
+						"float vertEdge = sample[0] + (2.0*sample[3]) + sample[5] - (sample[2] + (2.0*sample[5]) + sample[8]);",
+						"gl_FragColor.rgb = vec3(sqrt((horizEdge * horizEdge) + (vertEdge * vertEdge)));",
+						"if(gl_FragColor.r > 0.5 || gl_FragColor.g > 0.5 || gl_FragColor.b > 0.5){gl_FragColor.rgb = texture2D(tDiffuse,vUv).rgb;}",
+						"gl_FragColor.a = 1.0;",
+					"}",
+				].join("\n")
+			};
+			var composer_player = new THREE.EffectComposer( renderer );
+				 composer_player.addPass( new THREE.RenderPass( scene, camera_player ) );
+				 fluoEffect = new THREE.ShaderPass( outlineShader );
+				 fluoEffect.uniforms.width.value = window.innerWidth;
+				 fluoEffect.uniforms.height.value = window.innerHeight;
+				 composer_player.addPass( fluoEffect );
+				 fluoEffect.enabled = false;
+			var effect = new THREE.ShaderPass( THREE.CopyShader);
+				 effect.renderToScreen = true;
+				 composer_player.addPass( effect );
+
+			var composer_free = new THREE.EffectComposer( renderer );
+				 composer_free.addPass( new THREE.RenderPass( scene, camera_free ) );
+				 composer_free.addPass( fluoEffect );
+				 composer_free.addPass( effect );			 
 
 			//FPS stats
-			stats = new Stats();
+			var stats = new Stats();
 			stats.domElement.style.position = 'absolute';
 			stats.domElement.style.top = '0px';
 			document.body.appendChild( stats.domElement );
@@ -272,17 +391,61 @@
 					changeCamera : function() {if(!camera_error) camera = (camera+1)%2;},
 					pauseGame : function() {if(!camera_error) {if(pause) {pause = false; if(resumereset) {resumereset = false; resetS();}} else pause = true;}},
 					speed : 1,
-					skins : 0
+					lspeed : 1,
+					fluomode : false
 				};
 
 				var gui = new dat.GUI({autoplace: false});
 
-				var camerabtn = gui.add( game, "changeCamera" ).name( "Change to free camera" ); //to change camera type
-				camerabtn.onChange(function(){if (camera==0) camerabtn.name("Change to player camera"); if (camera==1) camerabtn.name("Change to free camera");});
-				var pausebtn = gui.add( game, "pauseGame" ).name( "Pause" ); //to pause/resume game
-				pausebtn.onChange(function(){if (pause) pausebtn.name("Pause"); else pausebtn.name("Resume");});
-				var speedsldr = gui.add( game, "speed", 1, 5).name("Speed").step(1).onChange( function( value ){ speed = value; } ); //to change the animation speed
-				var skinslct = gui.add( game, 'skins', {Default: 0, Isles: 1, Inferno: 2}).name("Skins"); //to switch between skins
+				var camerabtn = gui.add( game, "changeCamera" )
+					.name( "Change to free camera" ) //to change camera type
+					.onChange(function()
+					{
+						if (camera==0) camerabtn.name("Change to player camera");
+						if (camera==1) camerabtn.name("Change to free camera");
+					});
+				var pausebtn = gui.add( game, "pauseGame" ) //to pause/resume game
+					.name( "Pause" )
+					.onChange(function()
+					{
+						if (pause) pausebtn.name("Pause");
+						else pausebtn.name("Resume");
+					});
+				var speedsldr = gui.add( game, "speed", 1, 5) //to change the game speed
+					.name("Game speed")
+					.step(1)
+					.onChange( function( value ){ speed = value; } );
+				var lspeedsldr = gui.add( game, "lspeed", 1, 5)  //to change the animation speed
+					.name("Day/Night speed")
+					.step(1)
+					.onChange( function( value )
+					{
+						TWEEN.removeAll();
+						for(var i = 0; i < ansteps; i++)
+						{
+							tween[i].to(tween_pos[(i+1)%ansteps], 2000 + 4000/(value));
+						}
+						tween[active_tween].start();
+						
+					});
+				var fluobtn = gui.add( game, "fluomode" ).name( "Fluo mode" ); //to change aspect in fluomode
+				fluobtn.onChange(function(){
+					if (fluo)
+					{
+						fluobtn.name("Fluo mode");
+						fluoEffect.enabled = false;
+						fluo = false;
+						mmuniforms[0].diffuseMap.value = tex_wall;
+						mmuniforms[1].diffuseMap.value = tex_wall;
+						mmuniforms[2].diffuseMap.value = tex_wall;
+					}
+					else
+					{
+						fluoEffect.enabled = true;
+						fluo = true;
+						mmuniforms[0].diffuseMap.value = mmuniforms[1].diffuseMap.value = mmuniforms[2].diffuseMap.value = tex_fluo;
+					}
+				});
 			}
 
 			//adapt scene to window changes
@@ -312,20 +475,43 @@
 							default:
 						}
 					}
-					requestAnimationFrame(render); //update the image even if on pause
+					//update animation
+					anim = requestAnimationFrame(render);
+					//update weather
+					wtime++;
+					weather.intensity = (Math.sin(0.005*wtime) + 1) / 2;
+					//update shaders uniforms
+					updateUniforms();
+					//update lights position
+					TWEEN.update();
+					//rain
+					if(!rain && weather.intensity > 0.7)
+					{
+						instantiateRain();
+						scene.add(particleSystem);
+					}
+					if(rain && weather.intensity < 0.6)
+						rain = false;
+					updateRain();
 				}
-
+				
+				//FPS and scene always updated
 				stats.update();
-
+				camera_update();
+			}
+			
+			//function to update the scene according to active camera
+			function camera_update()
+			{
 				if(camera==0) //camera is not free: disable the free one and update the scene
 				{
-					renderer.render(scene, camera_player);
+					composer_player.render();
 					controls_free.enabled = false;
 					controls.update();
 				}
 				if(camera==1) //camera is free: disable the fixed one and update the scene
 				{
-					renderer.render(scene, camera_free);
+					composer_free.render();
 					controls_free.enabled = true;
 					controls_free.update();
 				}
@@ -335,7 +521,9 @@
 					camera_error = true;
 				}
 			}
-
+			////////////////////////////////////////////////////////////////
+			/////////////*****TETRIS PHASES******/////////////////
+			////////////////////////////////////////////////////////////////
 			//function to script phase 1 of the animation
 			function phase1()
 			{
@@ -343,7 +531,7 @@
 				{
 					updateScore(1203);
 					tetris1.position.set( 3 , 17 , -1 );
-					tetris2.position.set( next_x , next_y , next_z );
+					tetris2.position.set( next_pos[0] , next_pos[1] , next_pos[2] );
 					window.setTimeout( function(){shiftLeftSingle( tetris1 )}, 1500/speed); //horizontal shift asincrone from the vertical fall
 					scene.add( tetris1 );
 					scene.add( tetris2 );
@@ -371,7 +559,7 @@
 				{
 					updateScore(1209);
 					tetris2.position.set( 4 , 17 , -1 );
-					tetris3.position.set( next_x , next_y , next_z );
+					tetris3.position.set( next_pos[0] , next_pos[1] , next_pos[2] );
 					window.setTimeout( function(){ shiftLeftSingle( tetris2 );}, 700/speed );
 					window.setTimeout( function(){ shiftLeftSingle( tetris2 );}, 1200/speed );
 					scene.add( tetris2 );
@@ -401,7 +589,7 @@
 				{
 					updateScore(1214);
 					tetris3.position.set( 4 , 17 , -1 );
-					tetris4.position.set( next_x + 0.5 , next_y , next_z ); //yellow tetramin bad tetramin
+					tetris4.position.set( next_pos[0] + 0.5 , next_pos[1] , next_pos[2] ); //yellow tetramin bad tetramin
 					window.setTimeout( function(){ tetris3.rotation.z = Math.PI/2; shiftRightSingle ( tetris3 ); shiftRightSingle ( tetris3 );}, 700/speed );
 					window.setTimeout( function(){ shiftRightSingle( tetris3 );}, 1500/speed );
 					scene.add( tetris3 );
@@ -430,7 +618,7 @@
 				{
 					updateScore(1219);
 					tetris4.position.set( 4 , 17 , -1 );
-					tetris5.position.set( next_x , next_y , next_z );
+					tetris5.position.set( next_pos[0] , next_pos[1] , next_pos[2] );
 					scene.add( tetris4 );
 					scene.add( tetris5 );
 					active = 4;
@@ -456,7 +644,7 @@
 					{
 						updateScore(1222);
 						tetris5.position.set( 4 , 17 , -1 );
-						tetris6.position.set( next_x , next_y , next_z );
+						tetris6.position.set( next_pos[0] , next_pos[1] , next_pos[2] );
 						scene.add( tetris5 );
 						scene.add( tetris6 );
 						active = 5;
@@ -479,107 +667,113 @@
 					vtime = false;
 				}
 			}
-
-			//function to change the score of the game
-			function updateScore(scorenum)
-			{
-				scene.remove(score);
-				score_geom = new THREE.TextGeometry(scorenum, {font: 'helvetiker',  size: 0.5, height: 0.1, curveSegments: 1});
-				score = new THREE.Mesh( score_geom, score_mat ); //reuses material for performance
-				score.position.set( score_x + 2.7 , score_y , score_z );
-				scene.add(score);
-			}
-
-			//function to reset scene to phase 1
-			function resetS()
-			{
-				scene.remove(gameover);
-				scene.remove(gameoverbox);
-				scene.remove (tetris1); scene.remove (tetris2); scene.remove (tetris3); scene.remove (tetris4); scene.remove (tetris5); scene.remove (tetris6);
-				active = 0;
-				tetris3 = new THREE.Mesh( red_geom , red_mat ); //reset the rotating tetramin
-				rot = false;
-				phase = 1;
-				reset = false;
-			}
-
-			//function to adjust the scene when the window risizes
-			function onWindowResize()
-			{
-				canvasWidth = window.innerWidth;
-				canvasHeight = window.innerHeight;
-				renderer.setSize(canvasWidth,canvasHeight);
-				camera_player.aspect = canvasWidth/canvasHeight;
-				camera_player.updateProjectionMatrix();
-				camera_free.aspect = canvasWidth/canvasHeight;
-				camera_free.updateProjectionMatrix();
-			}
-
+			
+			////////////////////////////////////////////////////////////////
+			//////*****INSTANTIATION FUNCTIONS******/////////
+			////////////////////////////////////////////////////////////////
 			//function to create and position the two walls
-			function instantiateWalls()
+			function instantiateWalls(vs, fs)
 			{
 				var wallx = 1; var wally = 18; var wallz = 2;
-				var wall_geometry = new THREE.BoxGeometry( wallx , wally , wallz );
+				//Loading textures
+				var manager = new THREE.LoadingManager();
+				var tloader = new THREE.TextureLoader(manager);
+				tloader.load( "media/brick128.png", function ( texture ) { tex_wall = texture; } );
+				tloader.load( "media/brick128.png", function ( texture ) { tex_wall1 = texture; } );
+				tloader.load( "media/brick128.png", function ( texture ) { tex_wall2 = texture; } );
+				tloader.load( "media/brickfluo.jpg", function ( texture ) { tex_fluo = texture; } );
+				
+				manager.onLoad = function ( item, loaded, total ){
+					var wall_geometry = new THREE.BoxGeometry( wallx , wally , wallz );
+					
+					//general uniforms
+					for(var i = 0; i < mmuniforms.length; i++)
+					{
+						
+						mmuniforms[i].pointLightPosition.value = [new THREE.Vector3(60,60,5), new THREE.Vector3( -50, -50, 7)];
+						mmuniforms[i].alpha.value = 0.9;
+						mmuniforms[i].s.value = 0.7;
+						mmuniforms[i].c_spec.value = new THREE.Vector3(0.95,0.64,0.53);
+						mmuniforms[i].lightPower.value = [ new THREE.Vector3( sunpow, sunpow, sunpow ), new THREE.Vector3( moonpow, moonpow, moonpow )];
+						mmuniforms[i].ambient.value = new THREE.Vector3(0.25,0.16,0.08);
+						mmuniforms[i].visibility.value = 0.05;
+						mmuniforms[i].rho.value = new THREE.Vector3(0.3, 0.2, 0.1);
+					}
+					
+					//specific uniforms
+					tex_wall.wrapS = tex_wall.wrapT = THREE.RepeatWrapping;
+					mmuniforms[0].diffuseMap = {type : "t", value : tex_wall };
+					mmuniforms[0].repetition.value = new THREE.Vector2(wallx, wally);
+					tex_wall1.wrapS = tex_wall1.wrapT = THREE.RepeatWrapping;
+					mmuniforms[1].diffuseMap = {type : "t", value : tex_wall1 };
+					mmuniforms[1].repetition.value = new THREE.Vector2(wallx, wallz);
+					tex_wall2.wrapS = tex_wall2.wrapT = THREE.RepeatWrapping;
+					mmuniforms[2].diffuseMap = {type : "t", value : tex_wall2 };
+					mmuniforms[2].repetition.value = new THREE.Vector2(wallz, wally);
+					
+					var wall_material = new THREE.ShaderMaterial({uniforms: mmuniforms[0], vertexShader: vs, fragmentShader: fs });
+					var wall_material1 = new THREE.ShaderMaterial({uniforms: mmuniforms[1], vertexShader: vs, fragmentShader: fs });
+					var wall_material2 = new THREE.ShaderMaterial({uniforms: mmuniforms[2], vertexShader: vs, fragmentShader: fs });
 
-				var wall_material = new THREE.MeshBasicMaterial();
-				tex_wall.wrapS = tex_wall.wrapT = THREE.RepeatWrapping;
-				tex_wall.repeat.set( wallx, wally );
-				wall_material.map = tex_wall;
+					var wallMats = [
+						wall_material2, //right
+						wall_material2, //left
+						wall_material1, //above
+						wall_material1, //under
+						wall_material, //front
+						wall_material, //back
+					];
 
-				var wall_material1 = new THREE.MeshBasicMaterial();
-				tex_wall1.wrapS = tex_wall1.wrapT = THREE.RepeatWrapping;
-				tex_wall1.repeat.set( wallx , wallz );
-				wall_material1.map = tex_wall1;
-
-				var wall_material2 = new THREE.MeshBasicMaterial();
-			  tex_wall2.wrapS = tex_wall2.wrapT = THREE.RepeatWrapping;
-				tex_wall2.repeat.set( wallz , wally );
-				wall_material2.map = tex_wall2;
-
-				var wallMats = [
-					wall_material2, //right
-					wall_material2, //left
-					wall_material1, //above
-					wall_material1, //under
-					wall_material, //front
-					wall_material, //back
-				];
-
-				wallL = new THREE.Mesh( wall_geometry , new THREE.MeshFaceMaterial(wallMats));
-				wallR = new THREE.Mesh( wall_geometry , new THREE.MeshFaceMaterial(wallMats) );
-				wallL.position.set( 0 - (wallx / 2) , wally / 2 , -1);
-				wallR.position.set(10 + (wallx / 2) , wally / 2 , -1);
-				scene.add(wallL);
-				scene.add(wallR);
-				wallL.matrixAutoUpdate = false; wallL.updateMatrix();
-				wallR.matrixAutoUpdate = false; wallR.updateMatrix();
-			}
-
-			//function to create and position the eventual background
-			function instantiateBackground()
-			{
-				var backb = 100; var backh = 40; var backcolor = 0x000000;
-				var backx = 0; var backy = 20; var backz = -2.01;
-				var back_geometry = new THREE.PlaneBufferGeometry( backb , backh );
-				var back_material = new THREE.MeshBasicMaterial( { color: backcolor, side: THREE.DoubleSide } );
-				back = new THREE.Mesh(back_geometry, back_material);
-				back.position.set( backx , backy , backz );
-				scene.add(back);
-				back.matrixAutoUpdate = false; back.updateMatrix();
+					wallL = new THREE.Mesh( wall_geometry , new THREE.MeshFaceMaterial(wallMats));
+					wallL.castShadow = true;
+					wallR = new THREE.Mesh( wall_geometry , new THREE.MeshFaceMaterial(wallMats) );
+					wallR.castShadow = true;
+					wallL.position.set( 0 - (wallx / 2) , wally / 2 , -1);
+					wallR.position.set(10 + (wallx / 2) , wally / 2 , -1);
+					scene.add(wallL);
+					scene.add(wallR);
+					wallL.matrixAutoUpdate = false; wallL.updateMatrix();
+					wallR.matrixAutoUpdate = false; wallR.updateMatrix();
+				};
 			}
 
 			//function to create and position the terrain
-			function instantiateTerrain()
+			function instantiateTerrain(vs,fs)
 			{
-				var terrainb = 150; var terrainh = 50; var terraincolor = 0x6C7058;
-				var terrainx = 0; var terrainy = -0.05; var terrainz = 0;
-				var terrain_geometry = new THREE.PlaneBufferGeometry( terrainb , terrainh );
-				var terrain_material = new THREE.MeshBasicMaterial( { color: terraincolor, side: THREE.DoubleSide } );
-				terrain = new THREE.Mesh( terrain_geometry , terrain_material );
-				terrain.rotation.x = Math.PI / 2;
-				terrain.position.set( terrainx , terrainy , terrainz );
-				scene.add(terrain);
-				terrain.matrixAutoUpdate = false; terrain.updateMatrix();
+				var terrainb = 30; var terrains = 50; var terraincolor = 0x6C7058;
+				var terrainx = 5; var terrainy = -0.05; var terrainz = 10;
+				var terrain_geometry = new THREE.CircleGeometry( terrainb , terrains );
+				var terrain_material;
+				var tloader = new THREE.TextureLoader();
+				tloader.load( "media/sand.jpg", function ( texture ) {
+					texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+					baseuniforms.diffuseMap = {type : "t", value : texture };
+					//baseuniforms.diffuseMap.value.wrapS = wuniforms.diffuseMap.value.wrapT = THREE.RepeatWrapping;
+					baseshade()
+				});
+				
+				function baseshade()
+				{ 
+					var vss = injectShadows( vs, 8, 19, "v");
+					var fss = injectShadows( fs, 16, 59, "f");
+				
+					baseuniforms.lightPower.value = new THREE.Vector3( sunpow, sunpow, sunpow );
+					baseuniforms.mlightPower.value = new THREE.Vector3( moonpow, moonpow, moonpow );
+					baseuniforms.alpha.value = 0.9;
+					baseuniforms.s.value = 0.3;
+					baseuniforms.pointLightPosition.value = new THREE.Vector3(60,60,5);
+					baseuniforms.mpointLightPosition.value = new THREE.Vector3(-50,-50,7);
+					baseuniforms.c_spec.value = new THREE.Vector3( 1.0, 0.79, 0.21 );
+					baseuniforms.ambient.value = new THREE.Vector3( 0.0, 0.15, 0.15 );
+					
+					terrain_material = new THREE.ShaderMaterial({uniforms: baseuniforms, vertexShader: vss, fragmentShader: fss });
+					terrain = new THREE.Mesh( terrain_geometry , terrain_material );
+					terrain.rotation.x = -Math.PI / 2;
+					terrain.position.set( terrainx , terrainy , terrainz );
+					terrain.receiveShadow = true;
+					scene.add(terrain);
+					terrain.matrixAutoUpdate = false; terrain.updateMatrix();
+				}
 			}
 
 			//function to create and position the level text and its box
@@ -587,14 +781,15 @@
 			{
 				var level_geom = new THREE.TextGeometry("LEVEL 2", {font: 'helvetiker',  size: 0.7, height: 0.1, curveSegments: 1});
 				level = new THREE.Mesh( level_geom, new THREE.MeshBasicMaterial( {color: "white" } ) );
-				level.position.set( level_x , level_y , level_z );
+				level.position.set( level_pos[0] , level_pos[1] , level_pos[2] );
+				level.castShadow = true;
 				scene.add( level );
 				level.matrixAutoUpdate = false;
 				level.updateMatrix();
 
 				var levelboxx = 4.5; var levelboxy = 2; var levelboxz = 1;
 				levelbox = new THREE.Mesh( new THREE.BoxGeometry( levelboxx , levelboxy , levelboxz ) , transp_mat);
-				levelbox.position.set( level_x + 2 , level_y , level_z );
+				levelbox.position.set( level_pos[0] + 2 , level_pos[1] , level_pos[2] );
 				scene.add( levelbox );
 				levelbox.matrixAutoUpdate = false;
 				levelbox.updateMatrix();
@@ -605,14 +800,15 @@
 			{
 				var score_geom = new THREE.TextGeometry("SCORE : ", {font: 'helvetiker',  size: 0.5, height: 0.1, curveSegments: 1});
 				scoreT = new THREE.Mesh( score_geom,  score_mat);
-				scoreT.position.set( score_x , score_y , score_z );
+				scoreT.position.set( score_pos[0] , score_pos[1] , score_pos[2] );
+				scoreT.castShadow = true;
 				scene.add(scoreT);
 				scoreT.matrixAutoUpdate = false;
 				scoreT.updateMatrix();
 
 				var scoreboxx = 4.5; var scoreboxy = 2; var scoreboxz = 1;
 				scorebox = new THREE.Mesh( new THREE.BoxGeometry( scoreboxx , scoreboxy , scoreboxz ) , transp_mat);
-				scorebox.position.set( score_x + 2 , score_y , score_z );
+				scorebox.position.set( score_pos[0] + 2 , score_pos[1] , score_pos[2] );
 				scene.add(scorebox);
 				scorebox.matrixAutoUpdate = false;
 				scorebox.updateMatrix();
@@ -625,6 +821,7 @@
 				var gameover_geom = new THREE.TextGeometry("GAME OVER", {font: 'helvetiker',  size: 1, height: 0.5, curveSegments: 1});
 				gameover = new THREE.Mesh( gameover_geom, new THREE.MeshBasicMaterial( {color: "red" } ) );
 				gameover.position.set( gox , goy , goz );
+				gameover.castShadow = true;
 
 				var goboxx = 9; var goboxy = 2; var goboxz = 2;
 				gameoverbox = new THREE.Mesh( new THREE.BoxGeometry( goboxx , goboxy , goboxz ) , transp_mat_go);
@@ -636,19 +833,116 @@
 			{
 				var next_geom = new THREE.TextGeometry("NEXT", {font: 'helvetiker',  size: 0.7, height: 0.1, curveSegments: 1});
 				next = new THREE.Mesh( next_geom, new THREE.MeshBasicMaterial( {color: "white" } ) );
-				next.position.set( next_x+0.5 , next_y+3 , next_z+0.5 );
+				next.position.set( next_pos[0]+0.5 , next_pos[1]+3 , next_pos[2]+0.5 );
+				next.castShadow = true;
 				scene.add(next);
 				next.matrixAutoUpdate = false;
 				next.updateMatrix();
 
 				var nextboxx = 4; var nextboxy = 5; var nextboxz = 2;
 				nextbox = new THREE.Mesh( new THREE.BoxGeometry( nextboxx , nextboxy , nextboxz ) , transp_mat);
-				nextbox.position.set(next_x + 1.5 , next_y+2 , next_z+0.5);
+				nextbox.position.set(next_pos[0] + 1.5 , next_pos[1]+2 , next_pos[2]+0.5);
 				scene.add(nextbox);
 				nextbox.matrixAutoUpdate = false;
 				nextbox.updateMatrix();
 			}
-
+			
+			//function to create and position the two light sources
+			function instantiateLights()
+			{
+				var sun_geom = new THREE.SphereGeometry( 5 , 16 , 16 );
+				var sun_mat = new THREE.MeshBasicMaterial( {color: 0xF6FF6E} );
+				var sun_color = 0xFFE673;
+				var sun_intensity = 1;
+				maxsunh = 120;
+				sunpow = 400000.0;
+				
+				var moon_geom = new THREE.SphereGeometry( 3 , 16 , 16 );
+				var moon_mat = new THREE.MeshBasicMaterial( {color: 0xFBFFB6} );
+				var moon_color = 0xA3E3FF;
+				var moon_intensity = 0.7;
+				maxmoonh = 80;
+				moonpow = 90000.0;
+				
+				sun = new THREE.SpotLight( sun_color , sun_intensity , 0 );
+				sun.castShadow = true;
+				sun.shadowMapWidth = 1024; sun.shadowMapHeight = 1024;
+				//sun.shadowCameraNear = 40; sun.shadowCameraFar = 200; sun.shadowCameraFov = 35;
+				//sun.shadowCameraVisible = true;
+				sun.add( new THREE.Mesh( sun_geom , sun_mat ) );
+				scene.add(sun);
+				
+				moon = new THREE.SpotLight( moon_color, moon_intensity , 0 );
+				moon.castShadow = true;
+				moon.shadowMapWidth = 1024; moon.shadowMapHeight = 1024;
+				//moon.shadowCameraNear = 20; moon.shadowCameraFar = 200; moon.shadowCameraFov = 35;
+				//moon.shadowCameraVisible = true;
+				moon.add( new THREE.Mesh( moon_geom , moon_mat ) );
+				scene.add(moon);
+				
+				weather = new THREE.AmbientLight( 0x000000 , 0.05 );
+				
+				scene.add( weather );
+			}
+			
+			//Function to create and position the water plane
+			function instantiateWater(vs,fs)
+			{
+				var tloader = new THREE.TextureLoader( );
+				var water_pos = [0,-0.1,0];
+				var water_dim = [100,100];
+				
+				tloader.load( "media/water.jpg", function ( texture ) {
+					wuniforms.diffuseMap = {type : "t", value : texture };
+					wuniforms.diffuseMap.value.wrapS = wuniforms.diffuseMap.value.wrapT = THREE.RepeatWrapping;
+					watershade()
+				});
+				
+				function watershade()
+				{
+					wuniforms.lightPower.value = [ new THREE.Vector3( sunpow, sunpow, sunpow ), new THREE.Vector3( moonpow, moonpow, moonpow )];
+					wuniforms.alpha.value = 0.9;
+					wuniforms.s.value = 0.3;
+					wuniforms.pointLightPosition.value = [new THREE.Vector3(60,60,5), new THREE.Vector3( -50, -50, 7)];
+					wuniforms.c_spec.value = new THREE.Vector3( 0.02, 0.02, 0.02 );
+					wuniforms.ambient.value = new THREE.Vector3( 0.0, 0.0, 0.15 );
+					wuniforms.resolution.value = 1024.0;
+					wuniforms.visibility.value = 0.05;
+					
+					watermat = new THREE.ShaderMaterial({ uniforms: wuniforms, vertexShader: vs, fragmentShader: fs });
+					water = new THREE.Mesh( new THREE.CircleGeometry(water_dim[0],water_dim[1]), watermat);
+					water.position.set(water_pos[0],water_pos[1],water_pos[2]);
+					water.rotation.x = -Math.PI/2;
+					scene.add(water);
+				}
+			}
+			
+			//Function to create and shade the environment sphere
+			function instantiateEnv(vs,fs)
+			{
+				var tloader = new THREE.TextureLoader( );
+				tloader.load( "media/stars.jpg", function ( texture ) {
+					texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+					envuniforms.diffuseMap = {type : "t", value : texture };
+					envuniforms.pointLightPosition.value = [new THREE.Vector3(60,60,5), new THREE.Vector3( -50, -50, 7)];
+					envuniforms.repetition.value = 10.0;
+					envuniforms.ambient.value = new THREE.Vector3(0.3,0.1,0.1);
+					envuniforms.lmaxh.value = [120.0, 80.0];
+					envshade();
+				});
+				
+				function envshade()
+				{
+					var envmat = new THREE.ShaderMaterial( { uniforms: envuniforms, vertexShader: vs, fragmentShader: fs } );
+					envmat.side = THREE.BackSide;
+					environment = new THREE.Mesh(new THREE.SphereGeometry(200,100,100),envmat);
+					scene.add(environment);
+				}
+			}
+			
+			////////////////////////////////////////////////////////////////
+			//////*****MISCELLANEOUS FUNCTIONS******////////
+			////////////////////////////////////////////////////////////////
 			//function to make a vertical step towards the y=0 plane
 			function fallSingle( piece )
 			{
@@ -665,6 +959,306 @@
 			function shiftRightSingle( piece )
 			{
 					piece.position.set( piece.position.x + 1 , piece.position.y , piece.position.z )
+			}
+			
+			//function to change the score of the game
+			function updateScore(scorenum)
+			{
+				scene.remove(score);
+				score_geom = new THREE.TextGeometry(scorenum, {font: 'helvetiker',  size: 0.5, height: 0.1, curveSegments: 1});
+				score = new THREE.Mesh( score_geom, score_mat ); //reuses material for performance
+				score.position.set( score_pos[0] + 2.7 , score_pos[1] , score_pos[2] );
+				score.castShadow = true;
+				scene.add(score);
+			}
+
+			//function to reset scene to phase 1
+			function resetS()
+			{
+				scene.remove(gameover);
+				scene.remove(gameoverbox);
+				scene.remove (tetris1); scene.remove (tetris2); scene.remove (tetris3); scene.remove (tetris4); scene.remove (tetris5); scene.remove (tetris6);
+				active = 0;
+				tetris3 = new THREE.Mesh( red_geom , red_mat ); tetris3.castShadow = true;//reset the rotating tetramin
+				rot = false;
+				phase = 1;
+				reset = false;
+			}
+
+			//function to adjust the scene when the window risizes
+			function onWindowResize()
+			{
+				canvasWidth = window.innerWidth;
+				canvasHeight = window.innerHeight;
+				renderer.setSize(canvasWidth,canvasHeight);
+				camera_player.aspect = canvasWidth/canvasHeight;
+				camera_player.updateProjectionMatrix();
+				camera_free.aspect = canvasWidth/canvasHeight;
+				camera_free.updateProjectionMatrix();
+			}
+			
+			//function to load and instantiate all tetramin meshes
+			function tetraminsLoad()
+			{
+				//BLUE TETRIS
+				loader.load( "media/t_blue.obj" ,
+					function ( object ) {object.traverse(function (child) {
+					   if (child instanceof THREE.Mesh)
+						{
+							ttuniforms[0].ambient.value = new THREE.Vector3( 0.0, 0.0, 0.4 ); //blue;
+							ttuniforms[0].rho.value = new THREE.Vector3( 0.0, 0.0, 0.6 );
+							blue_mat = new THREE.ShaderMaterial({ uniforms: ttuniforms[0], vertexShader: ttvs, fragmentShader: ttfs });
+							var tetris = new THREE.Mesh( child.geometry , blue_mat ); tetris.position.set( 9 , 6 , -1 ); tetris.rotation.z = Math.PI/2; staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
+							blue_geom = child.geometry.clone();
+						}
+					})}
+				);
+
+				//GREEN TETRIS
+				loader.load( "media/t_green.obj" ,
+					function ( object ) {object.traverse(function (child) {
+					   if (child instanceof THREE.Mesh)
+						{
+							ttuniforms[1].ambient.value = new THREE.Vector3( 0.0, 0.4, 0.0 ); //green
+							ttuniforms[1].rho.value = new THREE.Vector3( 0.0, 0.6, 0.0 );
+							green_mat = new THREE.ShaderMaterial({ uniforms: ttuniforms[1], vertexShader: ttvs, fragmentShader: ttfs });
+							var tetris = new THREE.Mesh( child.geometry , green_mat ); tetris.position.set( 10 , 0 , -1 ); tetris.rotation.z = Math.PI/2; staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
+							var tetris = new THREE.Mesh( child.geometry , green_mat ); tetris.position.set( 0 , 8 , -1 ); staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
+							green_geom = child.geometry.clone();
+						}
+					})}
+				);
+
+				//RED TETRIS
+				loader.load( "media/t_red.obj" ,
+					function ( object ) {object.traverse(function (child) {
+					   if (child instanceof THREE.Mesh)
+						{
+							ttuniforms[2].ambient.value = new THREE.Vector3( 0.4, 0.0, 0.0 ); //red
+							ttuniforms[2].rho.value = new THREE.Vector3( 0.6, 0.0, 0.0 );
+							red_mat = new THREE.ShaderMaterial({ uniforms: ttuniforms[2], vertexShader: ttvs, fragmentShader: ttfs });
+							var tetris = new THREE.Mesh( child.geometry , red_mat ); tetris.position.set( 4 , 0 , -1 ); tetris.rotation.z = Math.PI/2; staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
+							var tetris = new THREE.Mesh( child.geometry , red_mat ); tetris.position.set( 8 , 0 , -1 ); tetris.rotation.z = Math.PI/2; staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
+							red_geom = child.geometry.clone();
+						}
+					})}
+				);
+
+				//YELLOW TETRIS
+				loader.load( "media/t_yellow.obj" ,
+					function ( object ) {object.traverse(function (child) {
+					   if (child instanceof THREE.Mesh)
+						{
+							ttuniforms[3].ambient.value = new THREE.Vector3( 0.4, 0.4, 0.0 ); //yellow
+							ttuniforms[3].rho.value = new THREE.Vector3( 0.6, 0.6, 0.0 );
+							yellow_mat = new THREE.ShaderMaterial({ uniforms: ttuniforms[3], vertexShader: ttvs, fragmentShader: ttfs });
+							var tetris = new THREE.Mesh(child.geometry, yellow_mat); tetris.position.set( 0 , 0 , -1 ); staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
+							var tetris = new THREE.Mesh(child.geometry, yellow_mat); tetris.position.set( 0 , 5 , -1 ); staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
+							var tetris = new THREE.Mesh(child.geometry, yellow_mat); tetris.position.set( 7 , 3 , -1 ); staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
+							var tetris = new THREE.Mesh(child.geometry, yellow_mat); tetris.position.set( 2 , 10 , -1 ); staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
+							var tetris = new THREE.Mesh(child.geometry, yellow_mat); tetris.position.set( 4 , 9 , -1 ); staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
+							yellow_geom = child.geometry.clone();
+						}
+					})}
+				);
+
+				//PURPLE TETRIS
+				loader.load( "media/t_purple.obj" ,
+					function ( object ) {object.traverse(function (child) {
+					   if (child instanceof THREE.Mesh)
+						{
+							ttuniforms[4].ambient.value = new THREE.Vector3( 0.4, 0.0, 0.4 ); //purple
+							ttuniforms[4].rho.value = new THREE.Vector3( 0.6, 0.0, 0.6 );
+							purple_mat = new THREE.ShaderMaterial({ uniforms: ttuniforms[4], vertexShader: ttvs, fragmentShader: ttfs });
+							var tetris = new THREE.Mesh( child.geometry , purple_mat ); tetris.position.set( 2 , 6 , -1 ); tetris.rotation.z = -Math.PI/2; staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
+							var tetris = new THREE.Mesh( child.geometry , purple_mat ); tetris.position.set( 4 , 8 , -1 ); tetris.rotation.z = -Math.PI/2; staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
+							var tetris = new THREE.Mesh( child.geometry , purple_mat ); tetris.position.set( 2 , 10 , -1 ); tetris.rotation.z = Math.PI/2; staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
+							var tetris = new THREE.Mesh( child.geometry , purple_mat ); tetris.position.set( 6 , 9 , -1 ); staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
+							purple_geom = child.geometry.clone();
+						}
+					})}
+				);
+
+				//ORANGE TETRIS
+				loader.load( "media/t_orange.obj" ,
+					function ( object ) {object.traverse(function (child) {
+					   if (child instanceof THREE.Mesh)
+						{
+							ttuniforms[5].ambient.value = new THREE.Vector3( 0.4, 0.2, 0.0 ); //orange
+							ttuniforms[5].rho.value = new THREE.Vector3( 0.6, 0.3, 0.0 );
+							orange_mat = new THREE.ShaderMaterial({ uniforms: ttuniforms[5], vertexShader: ttvs, fragmentShader: ttfs });
+							var tetris = new THREE.Mesh( child.geometry , orange_mat );  tetris.position.set( 1 , 5 , -1 ); tetris.rotation.z =  -Math.PI/2; staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
+							var tetris = new THREE.Mesh( child.geometry , orange_mat );  tetris.position.set( 5 , 7 , -1 ); staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
+							var tetris = new THREE.Mesh( child.geometry , orange_mat );  tetris.position.set( 8 , 13 , -1 ); tetris.rotation.z =  -Math.PI/2; staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
+							orange_geom = child.geometry.clone();
+						}
+					})}
+				);
+
+				//LIGHTBLUE TETRIS
+				loader.load( "media/t_lightblue.obj" ,
+					function ( object ) {object.traverse(function (child) {
+					   if (child instanceof THREE.Mesh)
+						{
+							ttuniforms[6].ambient.value = new THREE.Vector3( 0.0, 0.7, 1.0 ); //orange
+							ttuniforms[6].rho.value = new THREE.Vector3( 0.2, 0.4, 0.6 );
+							lightblue_mat = new THREE.ShaderMaterial({ uniforms: ttuniforms[6], vertexShader: ttvs, fragmentShader: ttfs });
+							var tetris = new THREE.Mesh( child.geometry , lightblue_mat ); tetris.position.set( 6 , 0 , -1 ); tetris.rotation.z = Math.PI/2; staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
+							var tetris = new THREE.Mesh( child.geometry , lightblue_mat ); tetris.position.set( 5 , 5 , -1 ); staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
+							var tetris = new THREE.Mesh( child.geometry , lightblue_mat ); tetris.position.set( 2 , 8 , -1 ); staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
+							var tetris = new THREE.Mesh( child.geometry , lightblue_mat ); tetris.position.set( 7 , 10 , -1 ); tetris.rotation.z = Math.PI/2; staticT.add(tetris); tetris.matrixAutoUpdate = false; tetris.updateMatrix();
+							lightblue_geom = child.geometry.clone();
+						}
+					})}
+				);
+			}
+			
+			/*Function to correctly insert the shadows in a shader given its type and structure*/
+			function injectShadows(shdr, bk1, bk2, type)
+			{
+				var sshdr; //shadowing shader
+				
+				var ss = shdr.split( "\n" );
+				sshdr = ss.slice( 0 , bk1 );
+				if(type == "v")
+					sshdr = sshdr.concat( THREE.ShaderChunk["shadowmap_pars_vertex"] );
+				if(type == "f")
+					sshdr = sshdr.concat( THREE.ShaderChunk["shadowmap_pars_fragment"] );
+				sshdr = sshdr.concat( ss.slice( bk1 , bk2 ));
+				if(type == "v")
+					sshdr = sshdr.concat( THREE.ShaderChunk["shadowmap_vertex"] );
+				if(type == "f")
+					sshdr = sshdr.concat( THREE.ShaderChunk["shadowmap_fragment"] );
+				sshdr = sshdr.concat( ss.slice( bk2 ));
+				sshdr = sshdr.join( "\n" );
+				
+				return sshdr;
+			}
+			
+			/*Function to update with the rendering all uniforms for shading*/
+			function updateUniforms()
+			{
+				//compute the lights position
+				var realsun = new THREE.Vector3();
+					 sun.localToWorld( realsun );
+				var realmoon = new THREE.Vector3();
+				moon.localToWorld( realmoon );
+				var sunp = Math.max( realsun.y / maxsunh * sunpow, 0.0 );
+				var moonp = Math.max( realmoon.y / maxmoonh * moonpow, 0.0 );
+				
+				//water update
+				wuniforms.pointLightPosition.value = [new THREE.Vector3( realsun.x, realsun.y, realsun.z), new THREE.Vector3( realmoon.x, realmoon.y, realmoon.z)];
+				wuniforms.lightPower.value = [ new THREE.Vector3( sunp, sunp, sunp ), new THREE.Vector3( moonp, moonp, moonp ) ];
+				if(rain)
+					wuniforms.time.value+=0.0004;
+				else
+					wuniforms.time.value+=0.0002;
+				wuniforms.wthrp.value = weather.intensity * 0.3;
+				//env update
+				envuniforms.pointLightPosition.value = [new THREE.Vector3( realsun.x, realsun.y, realsun.z), new THREE.Vector3( realmoon.x, realmoon.y, realmoon.z)];
+				envuniforms.wthrp.value = Math.min(weather.intensity * 0.5, 0.5);
+				//wallupdate
+				
+				//terrain update
+				baseuniforms.pointLightPosition.value = new THREE.Vector3(realsun.x, realsun.y, realsun.z);
+				baseuniforms.mpointLightPosition.value = new THREE.Vector3( realmoon.x, realmoon.y, realmoon.z);
+				baseuniforms.lightPower.value = new THREE.Vector3( sunp, sunp, sunp);
+				baseuniforms.mlightPower.value = new THREE.Vector3( moonp, moonp, moonp);
+				baseuniforms.wthrp.value = Math.min(weather.intensity * 0.5, 0.5);
+				//tetramin update
+				for( var i = 0; i < ttuniforms.length; i++)
+				{
+					ttuniforms[i].pointLightPosition.value = [
+						new THREE.Vector3(realsun.x, realsun.y, realsun.z),
+						new THREE.Vector3(realmoon.x, realmoon.y, realmoon.z)
+					];
+					ttuniforms[i].lightPower.value = [
+						new THREE.Vector3( sunp, sunp, sunp ),
+						new THREE.Vector3( moonp, moonp, moonp )
+					];
+					ttuniforms[i].wthrp.value = Math.min(weather.intensity * 0.4, 0.4);
+				}
+				//wall update
+				for( var i = 0; i < mmuniforms.length; i++)
+				{
+					mmuniforms[i].pointLightPosition.value = [
+						new THREE.Vector3(realsun.x, realsun.y, realsun.z),
+						new THREE.Vector3(realmoon.x, realmoon.y, realmoon.z)
+					];
+					mmuniforms[i].lightPower.value = [
+						new THREE.Vector3( sunp, sunp, sunp ),
+						new THREE.Vector3( moonp, moonp, moonp )
+					];
+					mmuniforms[i].wthrp.value = Math.min(weather.intensity * 0.3, 0.3);
+				}
+			}
+			
+			////////////////////////////////////////////////////////////////
+			//////////*****ANIMATION FUNCTIONS******//////////
+			////////////////////////////////////////////////////////////////
+			/*Function to animate sun and moon lights in a specific manner*/
+			function animateSunMoon()
+			{
+				var position = {x:100, y:0, z:5};
+				tween = Array(ansteps);
+				
+				for(var i = 0; i < ansteps; i++)
+				{
+					tween[i] = new TWEEN.Tween(position)
+					//.easing(TWEEN.Easing.Quadratic.In)
+					.onUpdate(function()
+					{
+						sun.position.set( position.x, position. y, position.z );
+						moon.position.set( -position.x, -position. y * 2/3, -position.z)
+					})
+					.to(tween_pos[(i+1)%ansteps], 6000);
+				}
+				for(var i = 0; i < ansteps; i++)
+					tween[i].chain(tween[(i+1)%ansteps]);
+				tween[0].onComplete(function(){active_tween = 1});
+				tween[1].onComplete(function(){active_tween = 2});
+				tween[2].onComplete(function(){active_tween = 3});
+				tween[3].onComplete(function(){active_tween = 4});
+				tween[4].onComplete(function(){active_tween = 5});
+				tween[5].onComplete(function(){active_tween = 6});
+				tween[6].onComplete(function(){active_tween = 7});
+				tween[7].onComplete(function(){active_tween = 0});
+				active_tween = 0;
+				tween[0].start();
+			}
+			
+			/*Function to create a particle rain effect*/
+			function instantiateRain()
+			{
+				scene.remove(particleSystem);
+				particles = new THREE.Geometry();
+				for (var p = 0; p < 10000; p++) {
+				    var particle = new THREE.Vector3(Math.random() * 200 - 100, Math.random() * 50 + 50, Math.random() * 200 - 100);
+				    particles.vertices.push(particle);
+				}
+				
+				var particleMaterial = new THREE.PointCloudMaterial( { color: 0x0431B4, size: 0.3 });
+				particleSystem = new THREE.PointCloud(particles, particleMaterial);
+				rain = true;
+			}
+			
+			/*Function to update rain effect*/
+			function updateRain()
+			{
+				var vert = particleSystem.geometry.vertices;
+				for(var i = 0; i < vert.length; i++)
+				{
+					if (vert[i].y < -2 && rain) //if it doesn't rain, let it go
+						vert[i].y = 50;
+					if (vert[i].x < -100 && rain) //if it doesn't rain, let it go
+						vert[i].x = 100;
+					if (vert[i].z > 100 && rain) //if it doesn't rain, let it go
+						vert[i].z = -100;
+					vert[i].y = vert[i].y - 0.6;
+					vert[i].x = vert[i].x - 0.1;
+					vert[i].z = vert[i].z + 0.2;
+				}
+				particleSystem.geometry.verticesNeedUpdate = true;
 			}
 		</script>
 	</body>
