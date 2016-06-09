@@ -9,6 +9,9 @@ from this perspective; the user can switch to the free (mouse-controlled) camera
 
 External resources:
 Shader Loader: https://github.com/codecruzer/webgl-shader-loader-js
+
 Sand texture: http://www.texturesforest.com/ripple-sand-texture
+
 Water Texture: http://seamless-pixels.blogspot.it/2012/10/tileable-water-texture.html
+
 Wall texture: http://mb.srb2.org/showpost.php?p=755167&postcount=1
