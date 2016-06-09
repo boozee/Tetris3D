@@ -8,6 +8,7 @@ The player camera is fixed and simulates the perspective of the original game, i
 from this perspective; the user can switch to the free (mouse-controlled) camera through the button on the top of the page.
 
 External resources:
+
 Shader Loader: https://github.com/codecruzer/webgl-shader-loader-js
 
 Sand texture: http://www.texturesforest.com/ripple-sand-texture
